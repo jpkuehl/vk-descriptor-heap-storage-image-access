@@ -1,1 +1,1 @@
-# vk-descriptor-heap-storage-image-access
+# Vulkan Descriptor Heap Storage Image Access
