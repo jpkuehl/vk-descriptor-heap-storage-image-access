@@ -16,8 +16,49 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Bin/Release)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_BINARY_DIR}/Bin/Debug)
 
-##################################################### SHADER #####################################################
+##################################################### Vulkan #####################################################
+# Check for Vulkan SDK and DXC shipped alongside it
+find_package(Vulkan QUIET OPTIONAL_COMPONENTS dxc)
 
+# Vulkan SDK check
+if(NOT Vulkan_FOUND)
+    message(FATAL_ERROR
+        "Vulkan SDK not found!\n"
+        "Please install the LunarG Vulkan SDK from:\n"
+        "https://vulkan.lunarg.com/sdk/home\n"
+        "Make sure the VULKAN_SDK environment variable is set."
+    )
+endif()
+
+# Vulkan target version
+# -> VK_EXT_descriptor_heap requires SDK 1.4.341.0 or newer.
+set(VULKAN_TARGET_VERSION "1.4.341")
+
+# Check the Vulkan version
+if (Vulkan_VERSION VERSION_LESS ${VULKAN_TARGET_VERSION})
+    message(FATAL_ERROR
+        "Found Vulkan SDK version ${Vulkan_VERSION}\n"
+        "This app requires SDK version ${VULKAN_TARGET_VERSION} or newer!\n"
+        "You can install a newer LunarG Vulkan SDK from:\n"
+        "https://vulkan.lunarg.com/sdk/home\n"
+        "or open Vulkan Configurator to update.\n"
+        "Build with \"cmake --fresh <build-command>\" after Vulkan update."
+    )
+endif()
+
+# DXC check
+if(NOT TARGET Vulkan::dxc_exe)
+    message(FATAL_ERROR
+        "DXC executable was not found.\n"
+        "Please install a Vulkan SDK that includes DXC."
+    )
+endif()
+
+message(STATUS "Found Vulkan: ${Vulkan_VERSION}")
+message(STATUS "Found DXC: ${Vulkan_dxc_EXECUTABLE}")
+##################################################################################################################
+
+##################################################### SHADER #####################################################
 # Set shader source file
 set(SHADER_SRC_FILE ${CMAKE_CURRENT_SOURCE_DIR}/Shader/StorageImageAccess.hlsl)
 
@@ -36,11 +77,6 @@ add_library(Shader INTERFACE ${SHADER_SRC_FILE})
 
 # Compile shader using DXC shipped alongide Vulkan
 #
-# - Check for DXC
-find_package(Vulkan REQUIRED COMPONENTS dxc)
-if(NOT TARGET Vulkan::dxc_exe)
-    message(FATAL_ERROR "DXC executable was not found in Vulkan SDK.")
-endif()
 # - Set shader output
 set(shader_output "${CMAKE_CURRENT_BINARY_DIR}/Shader/StorageImageAccess.spv")
 # - Add compilation command
@@ -65,16 +101,24 @@ add_custom_command(
 )
 # - Add target
 add_custom_target(ShaderCompilation ALL DEPENDS "${shader_output}")
-
 ###################################################### APP #######################################################
 
-# TODO: Add Vulkan check
-# TODO: Link Vulkan
 # TODO: Add shader debug information
 # TODO: Must adjust shader output directory
 
 # Add executable
 add_executable(App App/Main.cpp)
+
+# Link Vulkan
+target_link_libraries(App PRIVATE Vulkan::Vulkan)
+
+# Set macros
+target_compile_definitions(App PRIVATE
+    # - Set API version macro
+    #   -> For VkInstance creation, VkPhysicalDevice selection, and
+    #      device feature activation.
+    VULKAN_TARGET_API_VERSION=VK_MAKE_API_VERSION\(0,${VULKAN_TARGET_VERSION_MAJOR},${VULKAN_TARGET_VERSION_MINOR},${VULKAN_TARGET_VERSION_PATCH}\)
+)
 
 # In case we use Visual Studio (not VS Code!)
 # - Set the startup project
