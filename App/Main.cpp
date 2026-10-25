@@ -459,7 +459,54 @@ void PickPhysicalDevice()
 }
 void CreateDevice()
 {
-    // Create device
+    // Create info
+	VkDeviceCreateInfo createInfo{};
+	createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+	// - Enabled features
+	createInfo.pEnabledFeatures        = VK_NULL_HANDLE; // We use VkPhysicalDeviceFeatures2 in pNext, therefore we have to set nullptr here!	
+	// - Enabled extensions
+    std::vector<const char*> enabledExtensionNames{
+        "VK_EXT_descriptor_heap"
+    };
+	createInfo.enabledExtensionCount   = static_cast<uint32_t>(enabledExtensionNames.size());
+	createInfo.ppEnabledExtensionNames = enabledExtensionNames.data();
+	// - Enabled layers
+	//   DEPRECATED: Handled by VkInstance only
+	createInfo.enabledLayerCount       = 0;
+	createInfo.ppEnabledLayerNames     = VK_NULL_HANDLE;
+	// - Queues
+    createInfo.queueCreateInfoCount;
+    createInfo.pQueueCreateInfos;
+	// - Flags
+	createInfo.flags                   = 0;
+    // - Physical device features 2
+    // -- Buffer device address
+    VkPhysicalDeviceBufferDeviceAddressFeatures enabledBufferDeviceAddressFeatures{};
+    enabledBufferDeviceAddressFeatures.sType                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    enabledBufferDeviceAddressFeatures.bufferDeviceAddress              = VK_TRUE;
+    enabledBufferDeviceAddressFeatures.bufferDeviceAddressCaptureReplay = VK_TRUE;
+    // -- Descriptor heap
+    VkPhysicalDeviceDescriptorHeapFeaturesEXT enabledDescriptorHeapFeatures{};
+    enabledDescriptorHeapFeatures.sType                       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
+    enabledDescriptorHeapFeatures.descriptorHeap              = VK_TRUE;
+    enabledDescriptorHeapFeatures.descriptorHeapCaptureReplay = VK_TRUE;
+    enabledDescriptorHeapFeatures.pNext                       = &enabledBufferDeviceAddressFeatures;
+    // -- Base
+    VkPhysicalDeviceFeatures2 enabledPhysicalDeviceFeatures2{};
+    enabledPhysicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    enabledPhysicalDeviceFeatures2.pNext = &enabledDescriptorHeapFeatures;
+    // -- Set in pNext chain
+	createInfo.pNext                   = reinterpret_cast<const void*>(&enabledPhysicalDeviceFeatures2);
+
+	// Creation
+	ThrowIfFailed(
+		vkCreateDevice(
+			pPhysicalDevice,
+			&createInfo,
+			VK_NULL_HANDLE,
+			&pDevice
+		)
+	);
 }
 void CreateCommandObjects()
 {
