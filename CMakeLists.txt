@@ -101,6 +101,8 @@ add_custom_command(
 )
 # - Add target
 add_custom_target(ShaderCompilation ALL DEPENDS "${shader_output}")
+##################################################################################################################
+
 ###################################################### APP #######################################################
 
 # TODO: Add shader debug information
@@ -129,3 +131,4 @@ set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT A
 set_property(TARGET App PROPERTY
     VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/Bin/$<CONFIG>
 )
+##################################################################################################################
