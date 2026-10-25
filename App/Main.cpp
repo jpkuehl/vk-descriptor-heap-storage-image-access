@@ -13,26 +13,27 @@
 #endif
 
 // Core app components
-VkInstance            pInstance       { VK_NULL_HANDLE };
-VkPhysicalDevice      pPhysicalDevice { VK_NULL_HANDLE };
-VkDevice              pDevice         { VK_NULL_HANDLE };
-VkQueue               pQueue          { VK_NULL_HANDLE };
-VkCommandPool         pCmdPool        { VK_NULL_HANDLE };
-VkCommandBuffer       pCmdBuffer      { VK_NULL_HANDLE };
+VkInstance            g_pInstance       { VK_NULL_HANDLE };
+VkPhysicalDevice      g_pPhysicalDevice { VK_NULL_HANDLE };
+VkDevice              g_pDevice         { VK_NULL_HANDLE };
+uint32_t              g_QueueFamilyID   {};
+VkQueue               g_pQueue          { VK_NULL_HANDLE };
+VkCommandPool         g_pCmdPool        { VK_NULL_HANDLE };
+VkCommandBuffer       g_pCmdBuffer      { VK_NULL_HANDLE };
 struct StorageImage   
 {                     
     VkImage           pImage          { VK_NULL_HANDLE };
     VkDeviceMemory    pMemory         { VK_NULL_HANDLE };
-}                     storageImage    {};
+}                     g_StorageImage    {};
 struct DescriptorHeap 
 {                     
     VkBuffer          pBuffer         { VK_NULL_HANDLE };
     VkDeviceMemory    pMemory         { VK_NULL_HANDLE };
-}                     descriptorHeap  {};
-VkPipeline            pPipeline       { VK_NULL_HANDLE };
+}                     g_DescriptorHeap  {};
+VkPipeline            g_pPipeline       { VK_NULL_HANDLE };
 
 // Debug/validation components
-VkDebugUtilsMessengerEXT pDebugMessenger { VK_NULL_HANDLE };
+VkDebugUtilsMessengerEXT g_pDebugMessenger { VK_NULL_HANDLE };
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -250,7 +251,7 @@ void CreateInstance()
         vkCreateInstance(
             &createInfo,
             VK_NULL_HANDLE,
-            &pInstance
+            &g_pInstance
         )
     );
 }
@@ -262,7 +263,7 @@ void CreateDebugMessenger()
     // Load extension function
     PFN_vkCreateDebugUtilsMessengerEXT CreateDebugUtilsMessengerEXT { VK_NULL_HANDLE };
     CreateDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(pInstance, "vkCreateDebugUtilsMessengerEXT")
+        vkGetInstanceProcAddr(g_pInstance, "vkCreateDebugUtilsMessengerEXT")
     );
     if (!CreateDebugUtilsMessengerEXT)
         throw std::runtime_error("Unable to load vkCreateDebugUtilsMessengerEXT");
@@ -270,10 +271,10 @@ void CreateDebugMessenger()
     // Creation
     ThrowIfFailed(
         CreateDebugUtilsMessengerEXT(
-            pInstance,
+            g_pInstance,
             &createInfo,
             VK_NULL_HANDLE,
-            &pDebugMessenger
+            &g_pDebugMessenger
         )
     );
 }
@@ -281,10 +282,10 @@ void PickPhysicalDevice()
 {
 	// Get the physical devices
 	uint32_t deviceCount;
-	ThrowIfFailed(vkEnumeratePhysicalDevices(pInstance, &deviceCount, VK_NULL_HANDLE));
+	ThrowIfFailed(vkEnumeratePhysicalDevices(g_pInstance, &deviceCount, VK_NULL_HANDLE));
 	std::vector<VkPhysicalDevice> availableDevices;
     availableDevices.resize(deviceCount);
-	ThrowIfFailed(vkEnumeratePhysicalDevices(pInstance, &deviceCount, availableDevices.data()));
+	ThrowIfFailed(vkEnumeratePhysicalDevices(g_pInstance, &deviceCount, availableDevices.data()));
 
     // Device infos
     struct DeviceInfo
@@ -406,7 +407,7 @@ void PickPhysicalDevice()
         std::cout << "Found a single suitable device: " << devInfo.Name << "\n";
 
         // Set the physical device
-        pPhysicalDevice = devInfo.pPhysicalDevice;
+        g_pPhysicalDevice = devInfo.pPhysicalDevice;
 
         return;
     }
@@ -451,11 +452,45 @@ void PickPhysicalDevice()
             }
 
             // Set the physical device
-            pPhysicalDevice = it->second.pPhysicalDevice;
+            g_pPhysicalDevice = it->second.pPhysicalDevice;
             std::cout << "\n";
             break;
         }
     }
+}
+void PickQueueFamilyID()
+{
+	// Query the queue family properties
+	uint32_t propertiesCount;
+	vkGetPhysicalDeviceQueueFamilyProperties(
+		g_pPhysicalDevice,
+		&propertiesCount,
+		VK_NULL_HANDLE
+	);
+	std::vector<VkQueueFamilyProperties> queueFamilyProperties(propertiesCount);
+	vkGetPhysicalDeviceQueueFamilyProperties(
+		g_pPhysicalDevice,
+		&propertiesCount,
+		queueFamilyProperties.data()
+	);
+
+	// Determine the queue family types
+	uint32_t id { 0u };
+	for (const VkQueueFamilyProperties& properties : queueFamilyProperties)
+	{
+		// Check for a queue family that supports compute
+		if (properties.queueFlags & VK_QUEUE_COMPUTE_BIT)
+		{
+            g_QueueFamilyID = id;
+            return;
+		}
+
+		// Increment queue family index
+		++id;
+	}
+
+    // If we passed the loop, we found no suitable queue family
+    throw std::runtime_error("No suitable queue family found.");
 }
 void CreateDevice()
 {
@@ -474,9 +509,17 @@ void CreateDevice()
 	//   DEPRECATED: Handled by VkInstance only
 	createInfo.enabledLayerCount       = 0;
 	createInfo.ppEnabledLayerNames     = VK_NULL_HANDLE;
-	// - Queues
-    createInfo.queueCreateInfoCount;
-    createInfo.pQueueCreateInfos;
+	// - Queue
+    VkDeviceQueueCreateInfo queueCreateInfo{};
+    queueCreateInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo.queueFamilyIndex = g_QueueFamilyID;
+    queueCreateInfo.queueCount       = 1u;
+    const float queuePriority { 1.0f };
+    queueCreateInfo.pQueuePriorities = &queuePriority;
+    queueCreateInfo.flags            = 0u;
+    queueCreateInfo.pNext            = VK_NULL_HANDLE;
+    createInfo.queueCreateInfoCount  = 1u;
+    createInfo.pQueueCreateInfos     = &queueCreateInfo;
 	// - Flags
 	createInfo.flags                   = 0;
     // - Physical device features 2
@@ -496,21 +539,67 @@ void CreateDevice()
     enabledPhysicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     enabledPhysicalDeviceFeatures2.pNext = &enabledDescriptorHeapFeatures;
     // -- Set in pNext chain
-	createInfo.pNext                   = reinterpret_cast<const void*>(&enabledPhysicalDeviceFeatures2);
+	createInfo.pNext                   = &enabledPhysicalDeviceFeatures2;
 
 	// Creation
 	ThrowIfFailed(
 		vkCreateDevice(
-			pPhysicalDevice,
+            g_pPhysicalDevice,
 			&createInfo,
 			VK_NULL_HANDLE,
-			&pDevice
+			&g_pDevice
 		)
 	);
 }
 void CreateCommandObjects()
 {
     // Retrieve the queue handle
+    vkGetDeviceQueue(
+        g_pDevice,
+        g_QueueFamilyID,
+        0u,
+        &g_pQueue
+    );
+
+    // Create the command pool
+    {
+        // Create info
+		VkCommandPoolCreateInfo createInfo{};
+		createInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		createInfo.queueFamilyIndex = g_QueueFamilyID;
+		createInfo.flags            = 0u;
+		createInfo.pNext            = VK_NULL_HANDLE;
+
+		// Create
+		ThrowIfFailed(
+			vkCreateCommandPool(
+                g_pDevice,
+                &createInfo,
+                VK_NULL_HANDLE,
+                &g_pCmdPool
+            )
+		);
+    }
+
+    // Allocate the command buffer
+    {
+		// Allocate info
+		VkCommandBufferAllocateInfo allocInfo{};
+		allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.commandPool        = g_pCmdPool;
+		allocInfo.commandBufferCount = 1u;
+		allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.pNext              = VK_NULL_HANDLE;
+
+		// Allocate
+		ThrowIfFailed(
+			vkAllocateCommandBuffers(
+                g_pDevice,
+                &allocInfo,
+                &g_pCmdBuffer
+            )
+		);
+    }
 }
 void CreateStorageImage()
 {
@@ -533,6 +622,7 @@ void Init()
     CreateDebugMessenger();
 #endif
     PickPhysicalDevice();
+    PickQueueFamilyID();
     CreateDevice();
     CreateCommandObjects();
     CreateStorageImage();
@@ -549,41 +639,41 @@ void Dispatch()
 // Clean up
 void CleanUp()
 {
-    if (pPipeline)
-        vkDestroyPipeline(pDevice, pPipeline, VK_NULL_HANDLE);
-    if (descriptorHeap.pMemory)
-        vkFreeMemory(pDevice, descriptorHeap.pMemory, VK_NULL_HANDLE);
-    if (descriptorHeap.pBuffer)
-        vkDestroyBuffer(pDevice, descriptorHeap.pBuffer, VK_NULL_HANDLE);
-    if (storageImage.pMemory)
-        vkFreeMemory(pDevice, storageImage.pMemory, VK_NULL_HANDLE);
-    if (storageImage.pImage)
-        vkDestroyImage(pDevice, storageImage.pImage, VK_NULL_HANDLE);
-    if (pCmdPool)
-        vkDestroyCommandPool(pDevice, pCmdPool, VK_NULL_HANDLE);
-    if (pDevice)
-        vkDestroyDevice(pDevice, VK_NULL_HANDLE);
+    if (g_pPipeline)
+        vkDestroyPipeline(g_pDevice, g_pPipeline, VK_NULL_HANDLE);
+    if (g_DescriptorHeap.pMemory)
+        vkFreeMemory(g_pDevice, g_DescriptorHeap.pMemory, VK_NULL_HANDLE);
+    if (g_DescriptorHeap.pBuffer)
+        vkDestroyBuffer(g_pDevice, g_DescriptorHeap.pBuffer, VK_NULL_HANDLE);
+    if (g_StorageImage.pMemory)
+        vkFreeMemory(g_pDevice, g_StorageImage.pMemory, VK_NULL_HANDLE);
+    if (g_StorageImage.pImage)
+        vkDestroyImage(g_pDevice, g_StorageImage.pImage, VK_NULL_HANDLE);
+    if (g_pCmdPool)
+        vkDestroyCommandPool(g_pDevice, g_pCmdPool, VK_NULL_HANDLE);
+    if (g_pDevice)
+        vkDestroyDevice(g_pDevice, VK_NULL_HANDLE);
 #if defined(DEBUG) | defined(_DEBUG)
-    if (pDebugMessenger)
+    if (g_pDebugMessenger)
     {
         // Load extension function
         PFN_vkDestroyDebugUtilsMessengerEXT DestroyDebugUtilsMessengerEXT { VK_NULL_HANDLE };
         DestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-			vkGetInstanceProcAddr(pInstance, "vkDestroyDebugUtilsMessengerEXT")
+			vkGetInstanceProcAddr(g_pInstance, "vkDestroyDebugUtilsMessengerEXT")
 		);
 		if (!DestroyDebugUtilsMessengerEXT)
 			throw std::runtime_error("Unable to load vkDestroyDebugUtilsMessengerEXT");
 
         // Destroy
         DestroyDebugUtilsMessengerEXT(
-            pInstance,
-            pDebugMessenger,
+            g_pInstance,
+            g_pDebugMessenger,
             VK_NULL_HANDLE
         );
     }
 #endif
-    if (pInstance)
-        vkDestroyInstance(pInstance, VK_NULL_HANDLE);
+    if (g_pInstance)
+        vkDestroyInstance(g_pInstance, VK_NULL_HANDLE);
 }
 
 int main()
