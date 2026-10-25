@@ -1,4 +1,4 @@
-// (Bindful) storage image
+// (Bindful) Storage Image
 #ifdef __spirv__
 [[vk::image_format("r8")]]
 #endif

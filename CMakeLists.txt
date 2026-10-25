@@ -34,6 +34,12 @@ endif()
 # -> VK_EXT_descriptor_heap requires SDK 1.4.341.0 or newer.
 set(VULKAN_TARGET_VERSION "1.4.341")
 
+# Disassemble Vulkan target version
+string(REPLACE "." ";" VULKAN_TARGET_VERSION_PARTS ${VULKAN_TARGET_VERSION})
+list(GET VULKAN_TARGET_VERSION_PARTS 0 VULKAN_TARGET_VERSION_MAJOR)
+list(GET VULKAN_TARGET_VERSION_PARTS 1 VULKAN_TARGET_VERSION_MINOR)
+list(GET VULKAN_TARGET_VERSION_PARTS 2 VULKAN_TARGET_VERSION_PATCH)
+
 # Check the Vulkan version
 if (Vulkan_VERSION VERSION_LESS ${VULKAN_TARGET_VERSION})
     message(FATAL_ERROR
@@ -111,9 +117,6 @@ add_custom_target(ShaderCompilation ALL DEPENDS "${shader_output}")
 # Add executable
 add_executable(App App/Main.cpp)
 
-# Link Vulkan
-target_link_libraries(App PRIVATE Vulkan::Vulkan)
-
 # Set macros
 target_compile_definitions(App PRIVATE
     # - Set API version macro
@@ -121,6 +124,9 @@ target_compile_definitions(App PRIVATE
     #      device feature activation.
     VULKAN_TARGET_API_VERSION=VK_MAKE_API_VERSION\(0,${VULKAN_TARGET_VERSION_MAJOR},${VULKAN_TARGET_VERSION_MINOR},${VULKAN_TARGET_VERSION_PATCH}\)
 )
+
+# Link Vulkan
+target_link_libraries(App PRIVATE Vulkan::Vulkan)
 
 # In case we use Visual Studio (not VS Code!)
 # - Set the startup project
