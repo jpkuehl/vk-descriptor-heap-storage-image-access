@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <vector>
+#include <unordered_map>
 
 // Vulkan
 #include <vulkan/vulkan.h>
@@ -278,17 +279,191 @@ void CreateDebugMessenger()
 }
 void PickPhysicalDevice()
 {
+	// Get the physical devices
+	uint32_t deviceCount;
+	ThrowIfFailed(vkEnumeratePhysicalDevices(pInstance, &deviceCount, VK_NULL_HANDLE));
+	std::vector<VkPhysicalDevice> availableDevices;
+    availableDevices.resize(deviceCount);
+	ThrowIfFailed(vkEnumeratePhysicalDevices(pInstance, &deviceCount, availableDevices.data()));
 
+    // Device infos
+    struct DeviceInfo
+    {
+        VkPhysicalDevice pPhysicalDevice { VK_NULL_HANDLE };
+        std::string      Name;
+    };
+    std::unordered_map<uint32_t, DeviceInfo> deviceIDToInfo;
+    deviceIDToInfo.reserve(deviceCount);
+
+    // Helpers
+    auto CheckDeviceExtensionSupport = [](
+        const char* extensionName,
+        const std::vector<VkExtensionProperties>& supportedExtensionProperties) -> bool
+        {
+            for (const VkExtensionProperties& property : supportedExtensionProperties)
+                if (strcmp(property.extensionName, extensionName) == 0)
+                    return true;
+
+            return false;
+        };
+
+	// Iterate the devices
+	for (uint32_t devID = 0; devID < deviceCount; ++devID)
+	{
+        // Init device info
+        DeviceInfo deviceInfo{};
+
+		// Get the physical device
+        deviceInfo.pPhysicalDevice = availableDevices[devID];
+
+		// Get the physical device properties
+		VkPhysicalDeviceProperties devProps;
+		vkGetPhysicalDeviceProperties(deviceInfo.pPhysicalDevice, &devProps);
+
+        // Set the name
+        deviceInfo.Name = devProps.deviceName;
+
+		// Check if device reports API version >= target version
+        if (devProps.apiVersion < VULKAN_TARGET_API_VERSION)
+            continue;
+
+        // Query the device extensions this physical device supports
+        uint32_t supportedExtensionCount;
+        ThrowIfFailed(
+            vkEnumerateDeviceExtensionProperties(
+                deviceInfo.pPhysicalDevice,
+                VK_NULL_HANDLE,
+                &supportedExtensionCount,
+                VK_NULL_HANDLE
+            )
+        );
+        std::vector<VkExtensionProperties> supportedExtensionProperties(supportedExtensionCount);
+        ThrowIfFailed(
+            vkEnumerateDeviceExtensionProperties(
+                deviceInfo.pPhysicalDevice,
+                VK_NULL_HANDLE,
+                &supportedExtensionCount,
+                supportedExtensionProperties.data()
+            )
+        );
+
+        // Query the physical device features 2 the device supports
+        // - Buffer device address
+        VkPhysicalDeviceBufferDeviceAddressFeatures supportedBufferDeviceAddressFeatures {};
+        supportedBufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+        // - Descriptor heap
+        VkPhysicalDeviceDescriptorHeapFeaturesEXT supportedDescriptorHeapFeatures {};
+        supportedDescriptorHeapFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
+        supportedDescriptorHeapFeatures.pNext = &supportedBufferDeviceAddressFeatures;
+        // - Base
+        VkPhysicalDeviceFeatures2 supportedPhysicalDeviceFeatures2 {};
+        supportedPhysicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        supportedPhysicalDeviceFeatures2.pNext = &supportedDescriptorHeapFeatures;
+        // - Query
+        vkGetPhysicalDeviceFeatures2(deviceInfo.pPhysicalDevice, &supportedPhysicalDeviceFeatures2);
+
+        // Check if device supports descriptor heap extension
+        {
+            // Check extensions
+            // 
+            // - VK_EXT_descriptor_heap
+            if (!CheckDeviceExtensionSupport("VK_EXT_descriptor_heap", supportedExtensionProperties))
+                continue;
+            //
+            // - VK_KHR_shader_untyped_pointers
+            //   -> This one must be supported alongside VK_EXT_descriptor_heap
+            //      but it does not have to be enabled.
+            if (!CheckDeviceExtensionSupport("VK_KHR_shader_untyped_pointers", supportedExtensionProperties))
+                continue;
+
+            // Check features
+            if (!supportedDescriptorHeapFeatures.descriptorHeap ||
+                !supportedDescriptorHeapFeatures.descriptorHeapCaptureReplay ||
+                !supportedBufferDeviceAddressFeatures.bufferDeviceAddress ||
+                !supportedBufferDeviceAddressFeatures.bufferDeviceAddressCaptureReplay)
+                continue;
+        }
+
+        // Add device info to map
+        deviceIDToInfo.emplace(
+            std::piecewise_construct,
+            std::forward_as_tuple(devID),
+            std::forward_as_tuple(deviceInfo)
+        );
+	}
+
+    // If there is no suitable device
+    if (deviceIDToInfo.empty())
+        throw std::runtime_error("No suitable device found!");
+
+    // If there is just only one suitable device
+    if (deviceIDToInfo.size() == 1u)
+    {
+        // Get the device info
+        const auto& [devID, devInfo] { *deviceIDToInfo.begin() };
+
+        // Message
+        std::cout << "Found a single suitable device: " << devInfo.Name << "\n";
+
+        // Set the physical device
+        pPhysicalDevice = devInfo.pPhysicalDevice;
+
+        return;
+    }
+
+    // If there are multiple suitable devices
+    {
+        // List the suitable devices
+        std::cout << "Found multiple suitable devices:\n";
+        for (const auto& [devID, devInfo] : deviceIDToInfo)
+        {
+            std::cout << "- ID: " << devID << " / Name: " << devInfo.Name << '\n';
+        }
+        std::cout << "\n";
+
+        // Prompt the user to pick
+        while (true)
+        {
+            // Prompt the user to pick the desired device
+            std::cout << "Enter the ID of the desired device: ";
+
+            // Get ID
+            uint32_t devID;
+            
+            // 1. Check if the extraction itself failed (e.g., user typed text)
+            if (!(std::cin >> devID))
+            {
+                std::cin.clear();
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                std::cout << "Invalid input! Please enter a valid ID.\n";
+                continue;
+            }
+
+            // 2. Clear any leftover trailing whitespace/newline from a successful read
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+            // 3. Now check if the successfully parsed number exists in the map
+            const auto it { deviceIDToInfo.find(devID) };
+            if (it == deviceIDToInfo.end())
+            {
+                std::cout << "Invalid ID! Device not found.\n";
+                continue;
+            }
+
+            // Set the physical device
+            pPhysicalDevice = it->second.pPhysicalDevice;
+            std::cout << "\n";
+            break;
+        }
+    }
 }
 void CreateDevice()
 {
     // Create device
-
-    // Retrieve the queue handle
 }
 void CreateCommandObjects()
 {
-
+    // Retrieve the queue handle
 }
 void CreateStorageImage()
 {
