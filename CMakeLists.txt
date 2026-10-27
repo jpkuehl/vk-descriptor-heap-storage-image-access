@@ -111,40 +111,35 @@ else()
 endif()
 #
 # Output directory + filename
-# - Remove "Shaders" subdirectory for output.
-string(REGEX REPLACE "^Shaders/Effects/" "SPIR-V/" shader_output_path "${shader}")
 # - Binary
-set(shader_output_spv "${SHADER_BIN_DIR}/StorageImageAccess.spv")
+set(SHADER_OUTPUT_SPV "${SHADER_BIN_DIR}/StorageImageAccess.spv")
 # - Assembly
-set(shader_output_asm "${SHADER_BIN_DIR}/StorageImageAccess.asm")
+set(SHADER_OUTPUT_ASM "${SHADER_BIN_DIR}/StorageImageAccess.asm")
 #
 # - Add compilation command
 add_custom_command(
-    OUTPUT ${shader_output_spv} ${shader_output_asm}
+    OUTPUT ${SHADER_OUTPUT_SPV} ${SHADER_OUTPUT_ASM}
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_BIN_DIR}" # Make directory for output
     COMMAND Vulkan::dxc_exe                                          # dxc
-        "${SHADER_SRC_FILE}"                                         # Shader source
+        ${SHADER_SRC_FILE}                                           # Shader source
         -E Main                                                      # Shader entry point
         -T cs_6_6                                                    # Shader type and target version
         # Vulkan 1.4 did not work as target with Vulkan SDK 1.4;
         # 1.3 was the highest available target
         -fspv-target-env=vulkan1.3                                   # Vulkan target version
         -spirv                                                       # Set SPIR-V compilation (also activates __spirv__ macro in HLSL)
-        -Fo ${shader_output_spv}                                     # Compiled SPIR-V binary
-        -Fc ${shader_output_asm}                                     # SPIR-V assembly
+        -Fo ${SHADER_OUTPUT_SPV}                                     # Compiled SPIR-V binary
+        -Fc ${SHADER_OUTPUT_ASM}                                     # SPIR-V assembly
         ${SPIRV_DEBUG_OPTIONS}                                       # Debug options; see above
-    DEPENDS ${input}
+    DEPENDS ${SHADER_SRC_FILE}
     COMMENT "Compiling StorageImageAccess.hlsl to SPIR-V"
     VERBATIM
 )
 # - Add target
-add_custom_target(ShaderCompilation ALL DEPENDS "${shader_output_spv}" "${shader_output_asm}")
+add_custom_target(ShaderCompilation ALL DEPENDS "${SHADER_OUTPUT_SPV}" "${SHADER_OUTPUT_ASM}")
 ##################################################################################################################
 
 ###################################################### APP #######################################################
-
-# TODO: Add shader debug information
-# TODO: Must adjust shader output directory
 
 # Add executable
 add_executable(App App/Main.cpp)
@@ -155,7 +150,13 @@ target_compile_definitions(App PRIVATE
     #   -> For VkInstance creation, VkPhysicalDevice selection, and
     #      device feature activation.
     VULKAN_TARGET_API_VERSION=VK_MAKE_API_VERSION\(0,${VULKAN_TARGET_VERSION_MAJOR},${VULKAN_TARGET_VERSION_MINOR},${VULKAN_TARGET_VERSION_PATCH}\)
+    # - Shader binary file path for shader loading
+    SHADER_BIN_FILE_PATH="${SHADER_OUTPUT_SPV}"
+
 )
+if (CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
+    target_compile_definitions(App PRIVATE CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
+endif()
 
 # Link Vulkan
 target_link_libraries(App PRIVATE Vulkan::Vulkan)

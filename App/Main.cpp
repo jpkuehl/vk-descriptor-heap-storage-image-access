@@ -13,31 +13,33 @@
 #endif
 
 // Core app components
-VkInstance            g_pInstance                  { VK_NULL_HANDLE };
-VkPhysicalDevice      g_pPhysicalDevice            { VK_NULL_HANDLE };
-VkDevice              g_pDevice                    { VK_NULL_HANDLE };
-uint32_t              g_QueueFamilyID              {};
-VkQueue               g_pQueue                     { VK_NULL_HANDLE };
-VkCommandPool         g_pCmdPool                   { VK_NULL_HANDLE };
-VkCommandBuffer       g_pCmdBuffer                 { VK_NULL_HANDLE };
-struct StorageImage                                
-{                                                  
-    VkImage           pImage                       { VK_NULL_HANDLE };
-    VkDeviceMemory    pMemory                      { VK_NULL_HANDLE };
-}                     g_StorageImage               {};
+VkInstance                              g_pInstance                  { VK_NULL_HANDLE };
+VkPhysicalDevice                        g_pPhysicalDevice            { VK_NULL_HANDLE };
+VkDevice                                g_pDevice                    { VK_NULL_HANDLE };
+uint32_t                                g_QueueFamilyID              {};
+VkQueue                                 g_pQueue                     { VK_NULL_HANDLE };
+VkCommandPool                           g_pCmdPool                   { VK_NULL_HANDLE };
+VkCommandBuffer                         g_pCmdBuffer                 { VK_NULL_HANDLE };
+struct StorageImage                                                  
+{                                                                    
+    VkImage                             pImage                       { VK_NULL_HANDLE };
+    VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
+}                                       g_StorageImage               {};
 struct DescriptorHeap 
 {                     
-    VkBuffer          pBuffer                      { VK_NULL_HANDLE };
-    VkDeviceMemory    pMemory                      { VK_NULL_HANDLE };
-    uint8_t*          pHeapStartHostMemoryAddress  { nullptr };
-    uint64_t          HeapStartDeviceMemoryAddress { 0ull };
-    uint64_t          HeapSizeInBytes              { 0ull };
-    uint64_t          ReservedRangeOffsetInBytes   { 0ull };
-    uint64_t          ReservedRangeSizeInBytes     { 0ull };
-    uint64_t          ImageDescRangeOffsetInBytes  { 0ull };
-    uint64_t          ImageDescSizeInBytes         { 0ull };
-}                     g_DescriptorHeap             {};
-VkPipeline            g_pPipeline                  { VK_NULL_HANDLE };
+    VkBuffer                            pBuffer                      { VK_NULL_HANDLE };
+    VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
+    uint8_t*                            pHeapStartHostMemoryAddress  { nullptr };
+    uint64_t                            HeapStartDeviceMemoryAddress { 0ull };
+    uint64_t                            HeapSizeInBytes              { 0ull };
+    uint64_t                            ReservedRangeOffsetInBytes   { 0ull };
+    uint64_t                            ReservedRangeSizeInBytes     { 0ull };
+    uint64_t                            ImageDescRangeOffsetInBytes  { 0ull };
+    uint64_t                            ImageDescSizeInBytes         { 0ull };
+    uint32_t                            PushDataOffset               { 0u };
+    VkDescriptorSetAndBindingMappingEXT SetAndBindingMapping         {};
+}                                       g_DescriptorHeap             {};
+VkPipeline                              g_pPipeline                  { VK_NULL_HANDLE };
 
 // Instance extension functions
 PFN_vkSetDebugUtilsObjectNameEXT    g_vkSetDebugUtilsObjectNameEXT    { VK_NULL_HANDLE };
@@ -1019,8 +1021,47 @@ void CreateDescriptorHeap()
 
     // Set up descriptor set and binding mapping + push data
     {
+        g_DescriptorHeap.SetAndBindingMapping.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+        g_DescriptorHeap.SetAndBindingMapping.descriptorSet = 0u;
+        g_DescriptorHeap.SetAndBindingMapping.bindingCount  = 1u;
+        g_DescriptorHeap.SetAndBindingMapping.firstBinding  = 0u;
+        g_DescriptorHeap.SetAndBindingMapping.resourceMask  = VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT;
+        g_DescriptorHeap.SetAndBindingMapping.pNext         = VK_NULL_HANDLE;
+
+#if defined(CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
+        // CONSTANT OFFSET
+
+        g_DescriptorHeap.SetAndBindingMapping.source                                    = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+        // -> Instead of pushing the offset, we set it statically
+        g_DescriptorHeap.SetAndBindingMapping.sourceData.constantOffset.heapOffset      = g_DescriptorHeap.ImageDescRangeOffsetInBytes;
+        // - Byte stride between descriptors, but we only have single descriptor anyway
+        g_DescriptorHeap.SetAndBindingMapping.sourceData.constantOffset.heapArrayStride = g_DescriptorHeap.ImageDescSizeInBytes;
+#else
+        // PUSH INDEX
+
+        g_DescriptorHeap.SetAndBindingMapping.source                               = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+        // -> In general, we have to use byte offsets here since each semantic
+        //    can have different byte strides, so there is no universal byte
+        //    stride for a descriptor.
+		//    The final offset is computed as follows:
+		//        pushIndex   = ((uint32_t*)pPushData)[pushOffset / 4]
+		//        shaderIndex = (Binding - firstBinding) + arrayIndex
+		//        offset      = heapOffset + pushIndex * heapIndexStride + shaderIndex * heapArrayStride
+        //
+        // - 0: There is only a single entry in our push data
+        g_DescriptorHeap.SetAndBindingMapping.sourceData.pushIndex.pushOffset      = g_DescriptorHeap.PushDataOffset;
+        // - We use byte strides
+        g_DescriptorHeap.SetAndBindingMapping.sourceData.pushIndex.heapIndexStride = 1u;
+        // - Byte stride between descriptors, but we only have single descriptor anyway
+        g_DescriptorHeap.SetAndBindingMapping.sourceData.pushIndex.heapArrayStride = g_DescriptorHeap.ImageDescSizeInBytes;
+        // - No additional offset to the pushed offset
+        g_DescriptorHeap.SetAndBindingMapping.sourceData.pushIndex.heapOffset      = 0u;
+#endif
+
         // Max push data size
-        descriptorHeapProperties.maxPushDataSize;
+        // -> We only have set a single 4-byte value
+        if (descriptorHeapProperties.maxPushDataSize < 4u)
+            throw std::runtime_error("Application push data exceeds maxPushDataSize.");
     }
 }
 //
@@ -1268,6 +1309,28 @@ void Dispatch()
     // Bind pipeline
 
     // Push descriptor index
+    // -> Only if we did not set it as constant offset
+#if !defined(CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
+    {
+        // Push data info
+		VkPushDataInfoEXT pushDataInfo{};
+		pushDataInfo.sType        = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT;
+        // -> Push the offset to the descriptor range
+        const uint32_t descriptorRangeOffset {
+            static_cast<uint32_t>(g_DescriptorHeap.ImageDescRangeOffsetInBytes)
+        };
+		pushDataInfo.data.address = &descriptorRangeOffset;          // Push the offset to the descriptor range 
+		pushDataInfo.data.size    = 4u;
+		pushDataInfo.offset       = g_DescriptorHeap.PushDataOffset; // 0: There is only a single entry in our push data
+		pushDataInfo.pNext        = VK_NULL_HANDLE;
+
+		// Push data
+		g_vkCmdPushDataEXT(
+			g_pCmdBuffer,
+			&pushDataInfo
+		);
+    }
+#endif
 
     // Transition storage image
     {
