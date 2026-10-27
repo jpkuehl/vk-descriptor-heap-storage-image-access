@@ -38,6 +38,18 @@ struct DescriptorHeap
 }                     g_DescriptorHeap             {};
 VkPipeline            g_pPipeline                  { VK_NULL_HANDLE };
 
+// Instance extension functions
+PFN_vkSetDebugUtilsObjectNameEXT    g_vkSetDebugUtilsObjectNameEXT    { VK_NULL_HANDLE };
+#if defined(DEBUG) | defined(_DEBUG)
+PFN_vkCreateDebugUtilsMessengerEXT  g_vkCreateDebugUtilsMessengerEXT  { VK_NULL_HANDLE };
+PFN_vkDestroyDebugUtilsMessengerEXT g_vkDestroyDebugUtilsMessengerEXT { VK_NULL_HANDLE };
+#endif
+
+// Device extension functions
+PFN_vkCmdBindResourceHeapEXT      g_vkCmdBindResourceHeapEXT      { VK_NULL_HANDLE };
+PFN_vkWriteResourceDescriptorsEXT g_vkWriteResourceDescriptorsEXT { VK_NULL_HANDLE };
+PFN_vkCmdPushDataEXT              g_vkCmdPushDataEXT              { VK_NULL_HANDLE };
+
 // Debug/validation components
 VkDebugUtilsMessengerEXT g_pDebugMessenger { VK_NULL_HANDLE };
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
@@ -215,7 +227,6 @@ uint32_t FindMemoryTypeID(
     return bestMemTypeID;
 }
 
-// Init helpers
 void CreateInstance()
 {
     // Helpers
@@ -305,7 +316,6 @@ void CreateInstance()
 	// Create info
 	VkInstanceCreateInfo createInfo{};
 	createInfo.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-#if defined(DEBUG) | defined(_DEBUG)
 	// - Extensions
     std::vector<const char*> enabledExtensionNames{
         "VK_EXT_debug_utils"
@@ -313,6 +323,7 @@ void CreateInstance()
     CheckInstanceExtensionsSupport(enabledExtensionNames);
     createInfo.enabledExtensionCount   = static_cast<uint32_t>(enabledExtensionNames.size());
     createInfo.ppEnabledExtensionNames = enabledExtensionNames.data();
+#if defined(DEBUG) | defined(_DEBUG)
 	// - Layers
     std::vector<const char*> enabledLayerNames{
         "VK_LAYER_KHRONOS_validation"
@@ -342,22 +353,41 @@ void CreateInstance()
         )
     );
 }
+
+void LoadInstanceExtensionFunctions()
+{
+    // API object/handling naming
+    g_vkSetDebugUtilsObjectNameEXT = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+        vkGetInstanceProcAddr(g_pInstance, "vkSetDebugUtilsObjectNameEXT")
+        );
+    if (!g_vkSetDebugUtilsObjectNameEXT)
+        throw std::runtime_error("Unable to load vkSetDebugUtilsObjectNameEXT");
+
+#if defined(DEBUG) | defined(_DEBUG)
+    // Create debug utils messenger
+    g_vkCreateDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(g_pInstance, "vkCreateDebugUtilsMessengerEXT")
+        );
+    if (!g_vkCreateDebugUtilsMessengerEXT)
+        throw std::runtime_error("Unable to load vkCreateDebugUtilsMessengerEXT");
+    
+    // Destroy debug utils messenger
+    g_vkDestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(g_pInstance, "vkDestroyDebugUtilsMessengerEXT")
+        );
+    if (!g_vkDestroyDebugUtilsMessengerEXT)
+        throw std::runtime_error("Unable to load vkDestroyDebugUtilsMessengerEXT");
+#endif
+}
+
 void CreateDebugMessenger()
 {
     // Create info
     const VkDebugUtilsMessengerCreateInfoEXT createInfo { MakeDebugMessengerCreateInfo() };
 
-    // Load extension function
-    PFN_vkCreateDebugUtilsMessengerEXT pfnCreateDebugUtilsMessengerEXT { VK_NULL_HANDLE };
-    pfnCreateDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(g_pInstance, "vkCreateDebugUtilsMessengerEXT")
-    );
-    if (!pfnCreateDebugUtilsMessengerEXT)
-        throw std::runtime_error("Unable to load vkCreateDebugUtilsMessengerEXT");
-
     // Creation
     ThrowIfFailed(
-        pfnCreateDebugUtilsMessengerEXT(
+        g_vkCreateDebugUtilsMessengerEXT(
             g_pInstance,
             &createInfo,
             VK_NULL_HANDLE,
@@ -365,6 +395,7 @@ void CreateDebugMessenger()
         )
     );
 }
+
 void PickPhysicalDevice()
 {
 	// Get the physical devices
@@ -437,20 +468,24 @@ void PickPhysicalDevice()
 
         // Query the physical device features 2 the device supports
         // - Buffer device address
-        VkPhysicalDeviceBufferDeviceAddressFeatures supportedBufferDeviceAddressFeatures {};
+        VkPhysicalDeviceBufferDeviceAddressFeatures supportedBufferDeviceAddressFeatures{};
         supportedBufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
         // - Descriptor heap
-        VkPhysicalDeviceDescriptorHeapFeaturesEXT supportedDescriptorHeapFeatures {};
+        VkPhysicalDeviceDescriptorHeapFeaturesEXT supportedDescriptorHeapFeatures{};
         supportedDescriptorHeapFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
         supportedDescriptorHeapFeatures.pNext = &supportedBufferDeviceAddressFeatures;
+        // - Synchronization 2
+        VkPhysicalDeviceSynchronization2Features supportedSynchronization2Features{};
+        supportedSynchronization2Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
+        supportedSynchronization2Features.pNext = &supportedDescriptorHeapFeatures;
         // - Base
-        VkPhysicalDeviceFeatures2 supportedPhysicalDeviceFeatures2 {};
+        VkPhysicalDeviceFeatures2 supportedPhysicalDeviceFeatures2{};
         supportedPhysicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        supportedPhysicalDeviceFeatures2.pNext = &supportedDescriptorHeapFeatures;
+        supportedPhysicalDeviceFeatures2.pNext = &supportedSynchronization2Features;
         // - Query
         vkGetPhysicalDeviceFeatures2(deviceInfo.pPhysicalDevice, &supportedPhysicalDeviceFeatures2);
 
-        // Check if device supports descriptor heap extension
+        // Check if device supports descriptor heap extension and features
         {
             // Check extensions
             // 
@@ -469,6 +504,14 @@ void PickPhysicalDevice()
                 !supportedDescriptorHeapFeatures.descriptorHeapCaptureReplay ||
                 !supportedBufferDeviceAddressFeatures.bufferDeviceAddress ||
                 !supportedBufferDeviceAddressFeatures.bufferDeviceAddressCaptureReplay)
+                continue;
+        }
+
+        // Check if device supports synchronization 2 features
+        {
+            // -> No extension required, part of core since Vulkan 1.3
+            // Check features
+            if (!supportedSynchronization2Features.synchronization2)
                 continue;
         }
 
@@ -545,6 +588,7 @@ void PickPhysicalDevice()
         }
     }
 }
+
 void PickQueueFamilyID()
 {
 	// Query the queue family properties
@@ -579,6 +623,7 @@ void PickQueueFamilyID()
     // If we passed the loop, we found no suitable queue family
     throw std::runtime_error("No suitable queue family found.");
 }
+
 void CreateDevice()
 {
     // Create info
@@ -621,10 +666,15 @@ void CreateDevice()
     enabledDescriptorHeapFeatures.descriptorHeap              = VK_TRUE;
     enabledDescriptorHeapFeatures.descriptorHeapCaptureReplay = VK_TRUE;
     enabledDescriptorHeapFeatures.pNext                       = &enabledBufferDeviceAddressFeatures;
+    // -- Synchronization 2
+    VkPhysicalDeviceSynchronization2Features enabledSynchronization2Features{};
+    enabledSynchronization2Features.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
+    enabledSynchronization2Features.synchronization2 = VK_TRUE;
+    enabledSynchronization2Features.pNext            = &enabledDescriptorHeapFeatures;
     // -- Base
     VkPhysicalDeviceFeatures2 enabledPhysicalDeviceFeatures2{};
     enabledPhysicalDeviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    enabledPhysicalDeviceFeatures2.pNext = &enabledDescriptorHeapFeatures;
+    enabledPhysicalDeviceFeatures2.pNext = &enabledSynchronization2Features;
     // -- Set in pNext chain
 	createInfo.pNext                   = &enabledPhysicalDeviceFeatures2;
 
@@ -638,6 +688,31 @@ void CreateDevice()
 		)
 	);
 }
+
+void LoadDeviceExtensionFunctions()
+{
+    // Bind resource heap
+    g_vkCmdBindResourceHeapEXT = reinterpret_cast<PFN_vkCmdBindResourceHeapEXT>(
+        vkGetDeviceProcAddr(g_pDevice, "vkCmdBindResourceHeapEXT")
+        );
+    if (!g_vkCmdBindResourceHeapEXT)
+        throw std::runtime_error("Unable to load vkCmdBindResourceHeapEXT");
+    
+    // Write resource descriptors
+    g_vkWriteResourceDescriptorsEXT = reinterpret_cast<PFN_vkWriteResourceDescriptorsEXT>(
+        vkGetDeviceProcAddr(g_pDevice, "vkWriteResourceDescriptorsEXT")
+        );
+    if (!g_vkWriteResourceDescriptorsEXT)
+        throw std::runtime_error("Unable to load vkWriteResourceDescriptorsEXT");
+    
+    // Push data
+    g_vkCmdPushDataEXT = reinterpret_cast<PFN_vkCmdPushDataEXT>(
+        vkGetDeviceProcAddr(g_pDevice, "vkCmdPushDataEXT")
+        );
+    if (!g_vkCmdPushDataEXT)
+        throw std::runtime_error("Unable to load vkCmdPushDataEXT");
+}
+
 void CreateCommandObjects()
 {
     // Retrieve the queue handle
@@ -688,6 +763,7 @@ void CreateCommandObjects()
 		);
     }
 }
+
 void CreateDescriptorHeap()
 {
     // Alignment helper
@@ -769,12 +845,15 @@ void CreateDescriptorHeap()
         currentHeapOffsetInBytes += g_DescriptorHeap.ImageDescSizeInBytes;
     }
 
+    // Set descriptor heap size
+    g_DescriptorHeap.HeapSizeInBytes = currentHeapOffsetInBytes;
+
     // Create buffer
     {
         // Create info
         VkBufferCreateInfo createInfo{};
 	    createInfo.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	    createInfo.size                  = currentHeapOffsetInBytes;
+	    createInfo.size                  = g_DescriptorHeap.HeapSizeInBytes;
 	    createInfo.usage                 = VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
 	    createInfo.queueFamilyIndexCount = 0;
@@ -898,6 +977,7 @@ void CreateDescriptorHeap()
         descriptorHeapProperties.maxPushDataSize;
     }
 }
+
 void CreateStorageImage()
 {
     // Create the image
@@ -1004,6 +1084,7 @@ void CreateStorageImage()
 
     }
 }
+
 void CreatePipeline()
 {
 
@@ -1013,12 +1094,14 @@ void CreatePipeline()
 void Init()
 {
     CreateInstance();
+    LoadInstanceExtensionFunctions();
 #if defined(DEBUG) | defined(_DEBUG)
     CreateDebugMessenger();
 #endif
     PickPhysicalDevice();
     PickQueueFamilyID();
     CreateDevice();
+    LoadDeviceExtensionFunctions();
     CreateCommandObjects();
     CreateDescriptorHeap();
     CreateStorageImage();
@@ -1027,28 +1110,146 @@ void Init()
     std::cout << "Finished app init\n\n";
 }
 
+// TODO: SHADER_DEBUG_INFO and MAPPING_CONSTANT_OFFSET CMake options
+// TODO: Name resources
+
 // Dispatch
 void Dispatch()
 {
     std::cout << "Dispatching...\n";
 
     // Reset command pool
+    ThrowIfFailed(
+        vkResetCommandPool(
+            g_pDevice,
+            g_pCmdPool,
+            0u
+        )
+    );
 
     // Begin command buffer
+    {
+        // Begin info
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        beginInfo.pInheritanceInfo = VK_NULL_HANDLE;
+        beginInfo.pNext            = VK_NULL_HANDLE;
+
+        // Begin
+        ThrowIfFailed(
+            vkBeginCommandBuffer(
+                g_pCmdBuffer,
+                &beginInfo
+            )
+        );
+    }
 
     // Bind descriptor heap
+    {
+	    // Bind info
+	    VkBindHeapInfoEXT bindInfo{};
+	    bindInfo.sType               = VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT;
+	    bindInfo.heapRange.address   = g_DescriptorHeap.HeapStartDeviceMemoryAddress;
+	    bindInfo.heapRange.size      = g_DescriptorHeap.HeapSizeInBytes;
+	    bindInfo.reservedRangeOffset = g_DescriptorHeap.ReservedRangeOffsetInBytes;
+	    bindInfo.reservedRangeSize   = g_DescriptorHeap.ReservedRangeSizeInBytes;
+	    bindInfo.pNext               = VK_NULL_HANDLE;
+
+	    // Bind
+	    g_vkCmdBindResourceHeapEXT(
+	    	g_pCmdBuffer,
+	    	&bindInfo
+	    );
+    }
 
     // Bind pipeline
 
-    // Push descriptor
+    // Push descriptor index
 
     // Transition storage image
+    {
+        // Barrier
+		VkImageMemoryBarrier2 imageMemBarrier2{};
+		imageMemBarrier2.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+		imageMemBarrier2.image                           = g_StorageImage.pImage;
+		imageMemBarrier2.pNext                           = VK_NULL_HANDLE;
+		// - Subresource
+		imageMemBarrier2.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+		imageMemBarrier2.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+		imageMemBarrier2.subresourceRange.baseArrayLayer = 0u;
+		imageMemBarrier2.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+		imageMemBarrier2.subresourceRange.baseMipLevel   = 0u;
+		// - State transition
+		//   - Src
+		imageMemBarrier2.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+		imageMemBarrier2.srcAccessMask                   = VK_ACCESS_2_NONE;
+		imageMemBarrier2.srcStageMask                    = VK_PIPELINE_STAGE_2_NONE;
+		//   - Dst
+		imageMemBarrier2.newLayout                       = VK_IMAGE_LAYOUT_GENERAL;
+		imageMemBarrier2.dstAccessMask                   = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+		imageMemBarrier2.dstStageMask                    = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		// - Queue family ownership transfer
+        imageMemBarrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        imageMemBarrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+        // Dependency info
+        VkDependencyInfo dependencyInfo{};
+	    dependencyInfo.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+	    dependencyInfo.imageMemoryBarrierCount  = 1u;
+	    dependencyInfo.pImageMemoryBarriers     = &imageMemBarrier2;
+	    dependencyInfo.bufferMemoryBarrierCount = 0u;
+	    dependencyInfo.pBufferMemoryBarriers    = VK_NULL_HANDLE;
+	    dependencyInfo.memoryBarrierCount       = 0u;
+	    dependencyInfo.pMemoryBarriers          = VK_NULL_HANDLE;
+	    dependencyInfo.dependencyFlags          = 0u;
+	    dependencyInfo.pNext                    = VK_NULL_HANDLE;
+
+		// Schedule
+        vkCmdPipelineBarrier2(
+            g_pCmdBuffer,
+            &dependencyInfo
+        );
+    }
 
     // Dispatch
 
     // End command buffer
+    ThrowIfFailed(
+        vkEndCommandBuffer(g_pCmdBuffer)
+    );
 
     // Submit
+    {
+        // Command buffer submit info
+        VkCommandBufferSubmitInfo cmdBufferSubmitInfo{};
+        cmdBufferSubmitInfo.sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        cmdBufferSubmitInfo.commandBuffer = g_pCmdBuffer;
+        cmdBufferSubmitInfo.deviceMask    = 1u; // Single device -> Only one device in "group"
+        cmdBufferSubmitInfo.pNext         = VK_NULL_HANDLE;
+
+        // Submit info
+		VkSubmitInfo2 submitInfo2{};
+		submitInfo2.sType                    = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+		submitInfo2.waitSemaphoreInfoCount   = 0u;
+		submitInfo2.pWaitSemaphoreInfos      = VK_NULL_HANDLE;
+		submitInfo2.commandBufferInfoCount   = 1u;
+		submitInfo2.pCommandBufferInfos      = &cmdBufferSubmitInfo;
+		submitInfo2.signalSemaphoreInfoCount = 0u;
+		submitInfo2.pSignalSemaphoreInfos    = VK_NULL_HANDLE;
+		submitInfo2.flags                    = 0u;
+		submitInfo2.pNext                    = VK_NULL_HANDLE;
+
+		// Submit
+		ThrowIfFailed(
+			vkQueueSubmit2(
+				g_pQueue,
+				1u,
+				&submitInfo2,
+				VK_NULL_HANDLE
+			)
+		);
+    }
 
     // Sync
     vkDeviceWaitIdle(g_pDevice);
@@ -1075,22 +1276,11 @@ void CleanUp()
         vkDestroyDevice(g_pDevice, VK_NULL_HANDLE);
 #if defined(DEBUG) | defined(_DEBUG)
     if (g_pDebugMessenger)
-    {
-        // Load extension function
-        PFN_vkDestroyDebugUtilsMessengerEXT pfnDestroyDebugUtilsMessengerEXT { VK_NULL_HANDLE };
-        pfnDestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-			vkGetInstanceProcAddr(g_pInstance, "vkDestroyDebugUtilsMessengerEXT")
-		);
-		if (!pfnDestroyDebugUtilsMessengerEXT)
-			throw std::runtime_error("Unable to load vkDestroyDebugUtilsMessengerEXT");
-
-        // Destroy
-        pfnDestroyDebugUtilsMessengerEXT(
+        g_vkDestroyDebugUtilsMessengerEXT(
             g_pInstance,
             g_pDebugMessenger,
             VK_NULL_HANDLE
         );
-    }
 #endif
     if (g_pInstance)
         vkDestroyInstance(g_pInstance, VK_NULL_HANDLE);
