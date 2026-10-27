@@ -16,6 +16,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Bin/Release)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_BINARY_DIR}/Bin/Debug)
 
+# Option flags
+option(SHADER_DEBUG_INFO                       "Compile shaders with debug information"                   OFF)
+option(CONSTANT_OFFSET_SET_AND_BINDING_MAPPING "VkDescriptorSetAndBindingMappingEXT with constant offset" OFF)
+
 ##################################################### Vulkan #####################################################
 # Check for Vulkan SDK and DXC shipped alongside it
 find_package(Vulkan QUIET OPTIONAL_COMPONENTS dxc)
@@ -65,6 +69,17 @@ message(STATUS "Found DXC: ${Vulkan_dxc_EXECUTABLE}")
 ##################################################################################################################
 
 ##################################################### SHADER #####################################################
+# Compile shaders with debug information
+if(SHADER_DEBUG_INFO)
+    message(STATUS "Compile shaders with debug information - ON")
+    # Set the shader binary directory to debug
+    set(SHADER_BIN_DIR "${CMAKE_BINARY_DIR}/ShaderBin/Debug")
+else()
+    message(STATUS "Compile shaders with debug information - OFF")
+    # Set the shader binary directory to release
+    set(SHADER_BIN_DIR "${CMAKE_BINARY_DIR}/ShaderBin/Release")
+endif()
+
 # Set shader source file
 set(SHADER_SRC_FILE ${CMAKE_CURRENT_SOURCE_DIR}/Shader/StorageImageAccess.hlsl)
 
@@ -83,30 +98,47 @@ add_library(Shader INTERFACE ${SHADER_SRC_FILE})
 
 # Compile shader using DXC shipped alongide Vulkan
 #
-# - Set shader output
-set(shader_output "${CMAKE_CURRENT_BINARY_DIR}/Shader/StorageImageAccess.spv")
+# - Debug options
+#   -> Only added if option flag was toggled
+if(SHADER_DEBUG_INFO)
+    set(SPIRV_DEBUG_OPTIONS
+        -Od                            # Disables optimizations
+        -Zi                            # Enables debug information
+        -fspv-debug=vulkan-with-source # Instructs the compiler to embed the source string in the DebugSource instruction. RenderDoc reads the high-level source from this instruction.
+    )
+else()
+    set(SPIRV_DEBUG_OPTIONS)
+endif()
+#
+# Output directory + filename
+# - Remove "Shaders" subdirectory for output.
+string(REGEX REPLACE "^Shaders/Effects/" "SPIR-V/" shader_output_path "${shader}")
+# - Binary
+set(shader_output_spv "${SHADER_BIN_DIR}/StorageImageAccess.spv")
+# - Assembly
+set(shader_output_asm "${SHADER_BIN_DIR}/StorageImageAccess.asm")
+#
 # - Add compilation command
 add_custom_command(
-    OUTPUT "${shader_output}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-            "${CMAKE_CURRENT_BINARY_DIR}/Shader"
-    COMMAND Vulkan::dxc_exe
-            -spirv
-            # Vulkan 1.4 did not work as target with Vulkan SDK 1.4; 1.3 was the highest
-            # available target
-            -fspv-target-env=vulkan1.3
-            -T cs_6_6
-            -E Main
-            -Fo "${shader_output}"
-            "${SHADER_SRC_FILE}"
-    DEPENDS
-        "${SHADER_SRC_FILE}"
-        Vulkan::dxc_exe
+    OUTPUT ${shader_output_spv} ${shader_output_asm}
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_BIN_DIR}" # Make directory for output
+    COMMAND Vulkan::dxc_exe                                          # dxc
+        "${SHADER_SRC_FILE}"                                         # Shader source
+        -E Main                                                      # Shader entry point
+        -T cs_6_6                                                    # Shader type and target version
+        # Vulkan 1.4 did not work as target with Vulkan SDK 1.4;
+        # 1.3 was the highest available target
+        -fspv-target-env=vulkan1.3                                   # Vulkan target version
+        -spirv                                                       # Set SPIR-V compilation (also activates __spirv__ macro in HLSL)
+        -Fo ${shader_output_spv}                                     # Compiled SPIR-V binary
+        -Fc ${shader_output_asm}                                     # SPIR-V assembly
+        ${SPIRV_DEBUG_OPTIONS}                                       # Debug options; see above
+    DEPENDS ${input}
     COMMENT "Compiling StorageImageAccess.hlsl to SPIR-V"
     VERBATIM
 )
 # - Add target
-add_custom_target(ShaderCompilation ALL DEPENDS "${shader_output}")
+add_custom_target(ShaderCompilation ALL DEPENDS "${shader_output_spv}" "${shader_output_asm}")
 ##################################################################################################################
 
 ###################################################### APP #######################################################

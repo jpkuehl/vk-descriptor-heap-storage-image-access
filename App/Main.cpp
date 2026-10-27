@@ -1215,8 +1215,6 @@ void Init()
     std::cout << "Finished app init\n\n";
 }
 
-// TODO: SHADER_DEBUG_INFO and CONSTANT_OFFSET_SET_AND_BINDING_MAPPING CMake options
-
 // Dispatch
 void Dispatch()
 {
