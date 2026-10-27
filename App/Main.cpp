@@ -227,6 +227,31 @@ uint32_t FindMemoryTypeID(
     return bestMemTypeID;
 }
 
+// Object naming helper
+void SetObjectName(
+    uint64_t hObject,
+    VkObjectType objectType,
+    const std::string& name,
+    VkDevice pDevice)
+{
+    // Name info
+    VkDebugUtilsObjectNameInfoEXT nameInfo{};
+    nameInfo.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    nameInfo.objectType   = objectType;
+    nameInfo.objectHandle = hObject;
+    nameInfo.pObjectName  = name.c_str();
+    nameInfo.pNext        = VK_NULL_HANDLE;
+
+    // Set name
+    ThrowIfFailed(
+        g_vkSetDebugUtilsObjectNameEXT(
+            pDevice,
+            &nameInfo
+        )
+    );
+}
+
+// Init helpers
 void CreateInstance()
 {
     // Helpers
@@ -353,7 +378,7 @@ void CreateInstance()
         )
     );
 }
-
+//
 void LoadInstanceExtensionFunctions()
 {
     // API object/handling naming
@@ -379,7 +404,7 @@ void LoadInstanceExtensionFunctions()
         throw std::runtime_error("Unable to load vkDestroyDebugUtilsMessengerEXT");
 #endif
 }
-
+//
 void CreateDebugMessenger()
 {
     // Create info
@@ -395,7 +420,7 @@ void CreateDebugMessenger()
         )
     );
 }
-
+//
 void PickPhysicalDevice()
 {
 	// Get the physical devices
@@ -588,7 +613,7 @@ void PickPhysicalDevice()
         }
     }
 }
-
+//
 void PickQueueFamilyID()
 {
 	// Query the queue family properties
@@ -623,7 +648,7 @@ void PickQueueFamilyID()
     // If we passed the loop, we found no suitable queue family
     throw std::runtime_error("No suitable queue family found.");
 }
-
+//
 void CreateDevice()
 {
     // Create info
@@ -688,7 +713,7 @@ void CreateDevice()
 		)
 	);
 }
-
+//
 void LoadDeviceExtensionFunctions()
 {
     // Bind resource heap
@@ -712,7 +737,7 @@ void LoadDeviceExtensionFunctions()
     if (!g_vkCmdPushDataEXT)
         throw std::runtime_error("Unable to load vkCmdPushDataEXT");
 }
-
+//
 void CreateCommandObjects()
 {
     // Retrieve the queue handle
@@ -763,7 +788,7 @@ void CreateCommandObjects()
 		);
     }
 }
-
+//
 void CreateDescriptorHeap()
 {
     // Alignment helper
@@ -869,6 +894,14 @@ void CreateDescriptorHeap()
                 VK_NULL_HANDLE,
                 &g_DescriptorHeap.pBuffer
             )
+        );
+
+        // Name
+        SetObjectName(
+            reinterpret_cast<uint64_t>(g_DescriptorHeap.pBuffer),
+            VK_OBJECT_TYPE_BUFFER,
+            "Buffer: Descriptor Heap",
+            g_pDevice
         );
     }
 
@@ -977,7 +1010,7 @@ void CreateDescriptorHeap()
         descriptorHeapProperties.maxPushDataSize;
     }
 }
-
+//
 void CreateStorageImage()
 {
     // Create the image
@@ -1012,6 +1045,14 @@ void CreateStorageImage()
                 VK_NULL_HANDLE,
                 &g_StorageImage.pImage
             )
+        );
+
+        // Name
+        SetObjectName(
+            reinterpret_cast<uint64_t>(g_StorageImage.pImage),
+            VK_OBJECT_TYPE_IMAGE,
+            "Image: Storage Image",
+            g_pDevice
         );
     }
 
@@ -1084,7 +1125,7 @@ void CreateStorageImage()
 
     }
 }
-
+//
 void CreatePipeline()
 {
 
@@ -1111,7 +1152,6 @@ void Init()
 }
 
 // TODO: SHADER_DEBUG_INFO and MAPPING_CONSTANT_OFFSET CMake options
-// TODO: Name resources
 
 // Dispatch
 void Dispatch()
