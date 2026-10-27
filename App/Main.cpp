@@ -5,6 +5,7 @@
 #include <sstream>
 #include <vector>
 #include <unordered_map>
+#include <fstream>
 
 // Vulkan
 #include <vulkan/vulkan.h>
@@ -1233,7 +1234,132 @@ void CreateStorageImage()
 //
 void CreatePipeline()
 {
+    // Helper
+    auto LoadBinaryFile = [](
+        const std::string& filePath) -> std::vector<char>
+        {
+            // Open as binary file and advance the pointer to the end.
+            std::ifstream ifstream(filePath, std::ios::binary | std::ios::ate);
 
+            // Check if file is open.
+            if (!ifstream.is_open())
+            {
+                std::ostringstream sstream;
+                sstream << "Failed to open binary file \"" << filePath << "\"!";
+                throw std::runtime_error(sstream.str());
+            }
+
+            // Get the file size.
+            const uint64_t fileSize{
+                static_cast<uint64_t>(ifstream.tellg())
+            };
+
+            // Array to hold the binary data
+            std::vector<char> binaryData;
+            binaryData.resize(fileSize);
+
+            // Reset the file pointer.
+            ifstream.seekg(0u);
+
+            // Read the binary data into the array.
+            ifstream.read(binaryData.data(), fileSize);
+
+            // Close the file.
+            ifstream.close();
+
+            // Return the binary data.
+            return binaryData;
+        };
+
+    // Shader module
+    VkShaderModule pShaderModule { VK_NULL_HANDLE };
+    {
+        // Load binary
+        std::vector<char> shaderBinary{
+            LoadBinaryFile(SHADER_BIN_FILE_PATH)
+        };
+
+        // Create info
+		VkShaderModuleCreateInfo createInfo{};
+		createInfo.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+		createInfo.codeSize = shaderBinary.size();
+		createInfo.pCode    = reinterpret_cast<const uint32_t*>(shaderBinary.data());
+		createInfo.flags    = 0u;
+		createInfo.pNext    = VK_NULL_HANDLE;
+
+		// Creation
+		ThrowIfFailed(
+			vkCreateShaderModule(
+				g_pDevice,
+				&createInfo,
+				VK_NULL_HANDLE,
+				&pShaderModule
+			)
+		);
+    }
+
+    // Shader stage
+    VkPipelineShaderStageCreateInfo               shaderStageCreateInfo    {};
+    VkShaderDescriptorSetAndBindingMappingInfoEXT setAndBindingMappingInfo {};
+    {
+        // Set and binding mapping info
+	    setAndBindingMappingInfo.sType        = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
+	    setAndBindingMappingInfo.mappingCount = 1u;
+	    setAndBindingMappingInfo.pMappings    = &g_DescriptorHeap.SetAndBindingMapping;
+	    setAndBindingMappingInfo.pNext        = VK_NULL_HANDLE;
+
+        // Shader stage
+        shaderStageCreateInfo.sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		shaderStageCreateInfo.pName               = "Main";
+		shaderStageCreateInfo.module              = pShaderModule;
+		shaderStageCreateInfo.pSpecializationInfo = VK_NULL_HANDLE;
+		shaderStageCreateInfo.stage               = VK_SHADER_STAGE_COMPUTE_BIT;
+		shaderStageCreateInfo.flags               = 0u;
+		// -> Add set and binding mapping info to pNext chain.
+		//    It replaces pipeline layout when descriptor heaps
+		//    are used.
+		shaderStageCreateInfo.pNext               = &setAndBindingMappingInfo;
+    }
+
+    // Compute pipeline create info
+    VkComputePipelineCreateInfo pipelineCreateInfo{};
+    {
+        pipelineCreateInfo.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+	    // - No pipeline layout with VK_EXT_descriptor_heap
+	    //   Instead, set and binding mapping is added to pNext chain
+	    //   of shader stages.
+        pipelineCreateInfo.layout             = VK_NULL_HANDLE;
+        pipelineCreateInfo.stage              = shaderStageCreateInfo;
+        pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;
+        pipelineCreateInfo.basePipelineIndex  = 0u;
+        pipelineCreateInfo.flags              = 0u;
+	    // - Create flags 2
+        VkPipelineCreateFlags2CreateInfo createFlags2{};
+        createFlags2.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO;
+        createFlags2.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        createFlags2.pNext = VK_NULL_HANDLE;
+	    pipelineCreateInfo.pNext              = &createFlags2;
+    }
+
+    // Create
+    ThrowIfFailed(
+        vkCreateComputePipelines(
+            g_pDevice,
+            VK_NULL_HANDLE,
+            1u,
+            &pipelineCreateInfo,
+            VK_NULL_HANDLE,
+            &g_pPipeline
+        )
+    );
+
+    // Destroy shader module
+    if (pShaderModule)
+        vkDestroyShaderModule(
+            g_pDevice,
+            pShaderModule,
+            VK_NULL_HANDLE
+        );
 }
 
 // Init wrapper
