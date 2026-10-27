@@ -1433,6 +1433,11 @@ void Dispatch()
     }
 
     // Bind pipeline
+    vkCmdBindPipeline(
+        g_pCmdBuffer,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        g_pPipeline
+    );
 
     // Push descriptor index
     // -> Only if we did not set it as constant offset
@@ -1504,6 +1509,12 @@ void Dispatch()
     }
 
     // Dispatch
+    vkCmdDispatch(
+        g_pCmdBuffer,
+        1u,
+        1u,
+        1u
+    );
 
     // End command buffer
     ThrowIfFailed(
