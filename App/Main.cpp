@@ -13,24 +13,30 @@
 #endif
 
 // Core app components
-VkInstance            g_pInstance       { VK_NULL_HANDLE };
-VkPhysicalDevice      g_pPhysicalDevice { VK_NULL_HANDLE };
-VkDevice              g_pDevice         { VK_NULL_HANDLE };
-uint32_t              g_QueueFamilyID   {};
-VkQueue               g_pQueue          { VK_NULL_HANDLE };
-VkCommandPool         g_pCmdPool        { VK_NULL_HANDLE };
-VkCommandBuffer       g_pCmdBuffer      { VK_NULL_HANDLE };
-struct StorageImage   
-{                     
-    VkImage           pImage          { VK_NULL_HANDLE };
-    VkDeviceMemory    pMemory         { VK_NULL_HANDLE };
-}                     g_StorageImage    {};
+VkInstance            g_pInstance                  { VK_NULL_HANDLE };
+VkPhysicalDevice      g_pPhysicalDevice            { VK_NULL_HANDLE };
+VkDevice              g_pDevice                    { VK_NULL_HANDLE };
+uint32_t              g_QueueFamilyID              {};
+VkQueue               g_pQueue                     { VK_NULL_HANDLE };
+VkCommandPool         g_pCmdPool                   { VK_NULL_HANDLE };
+VkCommandBuffer       g_pCmdBuffer                 { VK_NULL_HANDLE };
+struct StorageImage                                
+{                                                  
+    VkImage           pImage                       { VK_NULL_HANDLE };
+    VkDeviceMemory    pMemory                      { VK_NULL_HANDLE };
+}                     g_StorageImage               {};
 struct DescriptorHeap 
 {                     
-    VkBuffer          pBuffer         { VK_NULL_HANDLE };
-    VkDeviceMemory    pMemory         { VK_NULL_HANDLE };
-}                     g_DescriptorHeap  {};
-VkPipeline            g_pPipeline       { VK_NULL_HANDLE };
+    VkBuffer          pBuffer                      { VK_NULL_HANDLE };
+    VkDeviceMemory    pMemory                      { VK_NULL_HANDLE };
+    uint64_t          HeapStartDeviceMemoryAddress { 0ull };
+    uint64_t          HeapSizeInBytes              { 0ull };
+    uint64_t          ReservedRangeOffsetInBytes   { 0ull };
+    uint64_t          ReservedRangeSizeInBytes     { 0ull };
+    uint64_t          ImageDescRangeOffsetInBytes  { 0ull };
+    uint64_t          ImageDescSizeInBytes         { 0ull };
+}                     g_DescriptorHeap             {};
+VkPipeline            g_pPipeline                  { VK_NULL_HANDLE };
 
 // Debug/validation components
 VkDebugUtilsMessengerEXT g_pDebugMessenger { VK_NULL_HANDLE };
@@ -126,6 +132,87 @@ void ThrowIfFailed(VkResult result)
 
     if (result != VK_SUCCESS)
         throw std::runtime_error(sstream.str());
+}
+
+// Memory type helper
+uint32_t FindMemoryTypeID(
+    uint32_t allowedMemoryTypeBits,
+    VkMemoryPropertyFlags requiredMemoryPropertyFlags,
+    VkMemoryPropertyFlags preferredMemoryPropertyFlags,
+    VkMemoryPropertyFlags preferredNotMemoryPropertyFlags,
+    VkPhysicalDevice pPhysicalDevice)
+{
+    constexpr uint32_t MAX_UINT32 { std::numeric_limits<uint32_t>().max() };
+
+    // Query the device memory properties just once
+    static VkPhysicalDeviceMemoryProperties memProperties = [pPhysicalDevice]()
+        {
+            // Query
+            VkPhysicalDeviceMemoryProperties2 memProperties2{};
+            memProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+            vkGetPhysicalDeviceMemoryProperties2(pPhysicalDevice, &memProperties2);
+
+            // Return the memory properties
+            return memProperties2.memoryProperties;
+        }();
+
+    // ID of the best-fitting memory type
+    uint32_t bestMemTypeID {  MAX_UINT32 };
+	// Best memory type score
+	int      bestScore     { -1 };
+	
+	// Iterate over the memory type IDs
+	for (uint32_t memTypeID = 0u; memTypeID < memProperties.memoryTypeCount; ++memTypeID)
+	{
+		// Check if this memory type ID is allowed for the allocation
+		// -> If the bit at position i is set, the memory type at ID i
+		//    is allowed.
+		if ((allowedMemoryTypeBits & (1u << memTypeID)) != 0)
+		{
+			// Get the property flags of this memory type.
+			const VkMemoryPropertyFlags propertyFlags{
+				memProperties.memoryTypes[memTypeID].propertyFlags
+			};
+
+			// Check the type's properties against our required properties.
+			// -> Check that all bits are set!
+			if ((propertyFlags & requiredMemoryPropertyFlags) != requiredMemoryPropertyFlags)
+				// If the required properties are not met, continue searching.
+				continue;
+
+			// Init the score
+			int score { 0 };
+
+			// Check the type's properties against our preferred properties.
+			// -> Check that all bits are set!
+			if ((propertyFlags & preferredMemoryPropertyFlags) == preferredMemoryPropertyFlags)
+				// Add to the score
+				// -> Preferred weighs higher than preferred-not.
+				score += 2;
+
+			// Check the type's properties against our preferred-not properties.
+			// -> Check that all bits are NOT set!
+			if ((propertyFlags & preferredNotMemoryPropertyFlags) == 0)
+				// Add to the score
+				score += 1;
+			
+			// Check the score and update the type ID if
+			// surpassed.
+			if (score > bestScore)
+			{
+				bestScore     = score;
+				bestMemTypeID = memTypeID;
+			}
+		}
+	}
+
+    // If our requirements were not met, throw
+    if (bestMemTypeID == MAX_UINT32)
+        throw std::runtime_error(
+            "Unable to find memory heap with required properties."
+        );
+
+    return bestMemTypeID;
 }
 
 // Init helpers
@@ -261,16 +348,16 @@ void CreateDebugMessenger()
     const VkDebugUtilsMessengerCreateInfoEXT createInfo { MakeDebugMessengerCreateInfo() };
 
     // Load extension function
-    PFN_vkCreateDebugUtilsMessengerEXT CreateDebugUtilsMessengerEXT { VK_NULL_HANDLE };
-    CreateDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+    PFN_vkCreateDebugUtilsMessengerEXT pfnCreateDebugUtilsMessengerEXT { VK_NULL_HANDLE };
+    pfnCreateDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
         vkGetInstanceProcAddr(g_pInstance, "vkCreateDebugUtilsMessengerEXT")
     );
-    if (!CreateDebugUtilsMessengerEXT)
+    if (!pfnCreateDebugUtilsMessengerEXT)
         throw std::runtime_error("Unable to load vkCreateDebugUtilsMessengerEXT");
 
     // Creation
     ThrowIfFailed(
-        CreateDebugUtilsMessengerEXT(
+        pfnCreateDebugUtilsMessengerEXT(
             g_pInstance,
             &createInfo,
             VK_NULL_HANDLE,
@@ -408,7 +495,7 @@ void PickPhysicalDevice()
 
         // Set the physical device
         g_pPhysicalDevice = devInfo.pPhysicalDevice;
-
+        std::cout << "\n";
         return;
     }
 
@@ -601,13 +688,321 @@ void CreateCommandObjects()
 		);
     }
 }
-void CreateStorageImage()
-{
-
-}
 void CreateDescriptorHeap()
 {
+    // Alignment helper
+    auto AlignUp = [](uint64_t value, uint64_t alignment)
+        {
+            return alignment ? ((value + alignment - 1) / alignment) * alignment : value;
+        };
 
+    // Keep track of the current heap offset, and thereby size
+    uint64_t currentHeapOffsetInBytes { 0ull };
+
+    VkPhysicalDeviceDescriptorHeapPropertiesEXT descriptorHeapProperties{};
+    descriptorHeapProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT;
+
+    // Account for reserved range
+    {
+        // Query VkPhysicalDeviceDescriptorHeapPropertiesEXT
+	    VkPhysicalDeviceProperties2 physicalDeviceProperties2{};
+	    physicalDeviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+	    physicalDeviceProperties2.pNext = &descriptorHeapProperties;
+	    vkGetPhysicalDeviceProperties2(
+	    	g_pPhysicalDevice,
+	    	&physicalDeviceProperties2
+	    );
+
+	    // Memory heap alignment
+        // -> We do not need it since we allocate a dedicated memory page
+        //    for the buffer, hence, the alignment is satisfied.
+        // -> This alignment must be satisfied for the device memory address
+        //    that is bound for the descriptor heap.
+	    descriptorHeapProperties.resourceHeapAlignment;
+
+	    // Account for the reserved range
+	    // -> The driver/implementation requires a slice of the bound heap
+	    //    memory for its own internal state tracking, embedded descriptors,
+	    //    or hardware constraints.
+	    // -> For a resource heap, reservedRangeOffset during binding has to be
+	    //    aligned to both:
+	    //    - bufferDescriptorAlignment
+	    //    - imageDescriptorAlignment
+	    //    -> Aligning is not necessary if we place the range at the start of
+	    //       the heap but we keep this logic in case we ever move the range.
+	    currentHeapOffsetInBytes = AlignUp(
+	    	currentHeapOffsetInBytes,
+	    	std::max(
+	    		descriptorHeapProperties.bufferDescriptorAlignment,
+	    		descriptorHeapProperties.imageDescriptorAlignment
+	    	)
+	    );
+	    g_DescriptorHeap.ReservedRangeOffsetInBytes = currentHeapOffsetInBytes;
+	    g_DescriptorHeap.ReservedRangeSizeInBytes   = descriptorHeapProperties.minResourceHeapReservedRange;
+	    //
+	    // - Offset the current heap offset
+	    currentHeapOffsetInBytes += g_DescriptorHeap.ReservedRangeSizeInBytes;
+    }
+
+    // Account for descriptor
+    {
+        // -> We need a resource descriptor heap with only a single
+        //    image descriptor
+
+        // Align current offset to image descriptor alignment
+        currentHeapOffsetInBytes = AlignUp(
+            currentHeapOffsetInBytes,
+            descriptorHeapProperties.imageDescriptorAlignment
+        );
+
+        // Set image descriptor range offset
+        // -> This is where we write the descriptor
+        g_DescriptorHeap.ImageDescRangeOffsetInBytes = currentHeapOffsetInBytes;
+
+        // Set image descriptor size
+        g_DescriptorHeap.ImageDescSizeInBytes = descriptorHeapProperties.imageDescriptorSize;
+
+        // -> We do not need the imageDescriptorAlignment an longer since
+        //    we only write a single descriptor in this app.
+
+        // Adjust the current heap offset for the descriptor size
+        currentHeapOffsetInBytes += g_DescriptorHeap.ImageDescSizeInBytes;
+    }
+
+    // Create buffer
+    {
+        // Create info
+        VkBufferCreateInfo createInfo{};
+	    createInfo.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	    createInfo.size                  = currentHeapOffsetInBytes;
+	    createInfo.usage                 = VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;;
+	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+	    createInfo.queueFamilyIndexCount = 0;
+	    createInfo.pQueueFamilyIndices   = VK_NULL_HANDLE;
+	    createInfo.flags                 = 0u;
+	    createInfo.pNext                 = VK_NULL_HANDLE;
+
+        // Creation
+        ThrowIfFailed(
+            vkCreateBuffer(
+                g_pDevice,
+                &createInfo,
+                VK_NULL_HANDLE,
+                &g_DescriptorHeap.pBuffer
+            )
+        );
+    }
+
+    // Allocate memory
+    {
+        // We allocate a dedicated memory block for a single resource
+        // -> Alignment is satisfied
+
+        // Get the memory requirements of the image
+        VkMemoryRequirements memoryRequirements{};
+        vkGetBufferMemoryRequirements(
+            g_pDevice,
+            g_DescriptorHeap.pBuffer,
+            &memoryRequirements
+        );
+
+        // Find memory type ID
+        // -> We require host-visible + host-coherent memory.
+        //    In addition, we prefer this memory to be device-local,
+        //    i.e., on discrete GPUs to be GPU upload memory.
+        const uint32_t memoryTypeID{
+             FindMemoryTypeID(
+                memoryRequirements.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                0u,
+                g_pPhysicalDevice
+            )
+        };
+
+        // Allocate info
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.memoryTypeIndex = memoryTypeID;
+        allocInfo.allocationSize  = memoryRequirements.size;
+        // - Allocate flags info
+	    //   -> We have to set the VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT flag to query a buffer's device address
+	    //      via vkGetBufferDeviceAddress and use that address inside shaders.
+	    VkMemoryAllocateFlagsInfo allocFlagsInfo{};
+	    allocFlagsInfo.sType      = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+	    allocFlagsInfo.flags      = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
+	    allocFlagsInfo.deviceMask = 1u; // Single device -> Only one device in "group";
+	    allocFlagsInfo.pNext      = VK_NULL_HANDLE;
+	    // - Add to pNext chain
+	    allocInfo.pNext           = &allocFlagsInfo;
+
+        // Allocation
+        ThrowIfFailed(
+            vkAllocateMemory(
+                g_pDevice,
+                &allocInfo,
+                VK_NULL_HANDLE,
+                &g_DescriptorHeap.pMemory
+            )
+        );
+    }
+
+    // Bind memory
+    {
+        // Bind info
+        VkBindBufferMemoryInfo bindInfo{};
+        bindInfo.sType        = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO;
+        bindInfo.buffer       = g_DescriptorHeap.pBuffer;
+        bindInfo.memory       = g_DescriptorHeap.pMemory;
+        bindInfo.memoryOffset = 0ull;
+        bindInfo.pNext        = VK_NULL_HANDLE;
+
+        // Bind
+        ThrowIfFailed(
+            vkBindBufferMemory2(
+                g_pDevice,
+                1u,
+                &bindInfo
+            )
+        );
+    }
+
+    // Get the heap start device address
+    {
+        // Address info
+        VkBufferDeviceAddressInfo deviceAddressInfo{};
+        deviceAddressInfo.sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        deviceAddressInfo.buffer = g_DescriptorHeap.pBuffer;
+        deviceAddressInfo.pNext  = VK_NULL_HANDLE;
+
+        // Query
+        g_DescriptorHeap.HeapStartDeviceMemoryAddress = vkGetBufferDeviceAddress(
+            g_pDevice,
+            &deviceAddressInfo
+        );
+
+        // Make sure alignment is satisfied
+        // -> We only add this here for completeness.
+        //    This check will get passed no matter what since we allocated
+        //    a dedicated page and bound the buffer at offset 0.
+        if (g_DescriptorHeap.HeapStartDeviceMemoryAddress % descriptorHeapProperties.resourceHeapAlignment)
+            throw std::runtime_error(
+                "Descriptor heap start's device memory address "
+                "does not adhere to resourceHeapAlignment."
+            );
+    }
+
+    // Set up descriptor set and binding mapping + push data
+    {
+        // Max push data size
+        descriptorHeapProperties.maxPushDataSize;
+    }
+}
+void CreateStorageImage()
+{
+    // Create the image
+    {
+        // -> 1x1 2D image of R8_UNORM format with storage usage
+
+        // Create info
+        VkImageCreateInfo createInfo{};
+	    createInfo.sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	    createInfo.imageType             = VK_IMAGE_TYPE_2D;
+	    createInfo.extent.width          = 1u;
+	    createInfo.extent.height         = 1u;
+	    createInfo.extent.depth          = 1u;
+	    createInfo.arrayLayers           = 1u;
+	    createInfo.mipLevels             = 1u;
+	    createInfo.format                = VK_FORMAT_R8_UNORM;
+	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT;
+	    createInfo.initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED;
+	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+	    createInfo.queueFamilyIndexCount = 0;
+	    createInfo.pQueueFamilyIndices   = VK_NULL_HANDLE;
+	    createInfo.samples               = VK_SAMPLE_COUNT_1_BIT;
+	    createInfo.tiling                = VK_IMAGE_TILING_OPTIMAL;
+	    createInfo.flags                 = 0u;
+	    createInfo.pNext                 = VK_NULL_HANDLE;
+
+        // Creation
+        ThrowIfFailed(
+            vkCreateImage(
+                g_pDevice,
+                &createInfo,
+                VK_NULL_HANDLE,
+                &g_StorageImage.pImage
+            )
+        );
+    }
+
+    // Allocate memory
+    {
+        // We allocate a dedicated memory block for a single resource
+        // -> Alignment is satisfied
+
+        // Get the memory requirements of the image
+        VkMemoryRequirements memoryRequirements{};
+        vkGetImageMemoryRequirements(
+            g_pDevice,
+            g_StorageImage.pImage,
+            &memoryRequirements
+        );
+
+        // Find memory type ID
+        // -> We require device-local memory and prefer that
+        //    it is not host-visible.
+        const uint32_t memoryTypeID{
+             FindMemoryTypeID(
+                memoryRequirements.memoryTypeBits,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                0u,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                g_pPhysicalDevice
+            )
+        };
+
+        // Allocate info
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.memoryTypeIndex = memoryTypeID;
+        allocInfo.allocationSize  = memoryRequirements.size;
+        allocInfo.pNext           = VK_NULL_HANDLE;
+
+        // Allocation
+        ThrowIfFailed(
+            vkAllocateMemory(
+                g_pDevice,
+                &allocInfo,
+                VK_NULL_HANDLE,
+                &g_StorageImage.pMemory
+            )
+        );
+    }
+
+    // Bind memory
+    {
+        // Bind info
+        VkBindImageMemoryInfo bindInfo{};
+        bindInfo.sType        = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+        bindInfo.image        = g_StorageImage.pImage;
+        bindInfo.memory       = g_StorageImage.pMemory;
+        bindInfo.memoryOffset = 0ull;
+        bindInfo.pNext        = VK_NULL_HANDLE;
+
+        // Bind
+        ThrowIfFailed(
+            vkBindImageMemory2(
+                g_pDevice,
+                1u,
+                &bindInfo
+            )
+        );
+    }
+
+    // Write descriptor
+    {
+
+    }
 }
 void CreatePipeline()
 {
@@ -625,15 +1020,40 @@ void Init()
     PickQueueFamilyID();
     CreateDevice();
     CreateCommandObjects();
-    CreateStorageImage();
     CreateDescriptorHeap();
+    CreateStorageImage();
     CreatePipeline();
+
+    std::cout << "Finished app init\n\n";
 }
 
 // Dispatch
 void Dispatch()
 {
+    std::cout << "Dispatching...\n";
 
+    // Reset command pool
+
+    // Begin command buffer
+
+    // Bind descriptor heap
+
+    // Bind pipeline
+
+    // Push descriptor
+
+    // Transition storage image
+
+    // Dispatch
+
+    // End command buffer
+
+    // Submit
+
+    // Sync
+    vkDeviceWaitIdle(g_pDevice);
+
+    std::cout << "...Success!\n\n";
 }
 
 // Clean up
@@ -657,15 +1077,15 @@ void CleanUp()
     if (g_pDebugMessenger)
     {
         // Load extension function
-        PFN_vkDestroyDebugUtilsMessengerEXT DestroyDebugUtilsMessengerEXT { VK_NULL_HANDLE };
-        DestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        PFN_vkDestroyDebugUtilsMessengerEXT pfnDestroyDebugUtilsMessengerEXT { VK_NULL_HANDLE };
+        pfnDestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
 			vkGetInstanceProcAddr(g_pInstance, "vkDestroyDebugUtilsMessengerEXT")
 		);
-		if (!DestroyDebugUtilsMessengerEXT)
+		if (!pfnDestroyDebugUtilsMessengerEXT)
 			throw std::runtime_error("Unable to load vkDestroyDebugUtilsMessengerEXT");
 
         // Destroy
-        DestroyDebugUtilsMessengerEXT(
+        pfnDestroyDebugUtilsMessengerEXT(
             g_pInstance,
             g_pDebugMessenger,
             VK_NULL_HANDLE
@@ -674,6 +1094,8 @@ void CleanUp()
 #endif
     if (g_pInstance)
         vkDestroyInstance(g_pInstance, VK_NULL_HANDLE);
+
+    std::cout << "Cleaned up app\n";
 }
 
 int main()
