@@ -29,6 +29,7 @@ struct DescriptorHeap
 {                     
     VkBuffer          pBuffer                      { VK_NULL_HANDLE };
     VkDeviceMemory    pMemory                      { VK_NULL_HANDLE };
+    uint8_t*          pHeapStartHostMemoryAddress  { nullptr };
     uint64_t          HeapStartDeviceMemoryAddress { 0ull };
     uint64_t          HeapSizeInBytes              { 0ull };
     uint64_t          ReservedRangeOffsetInBytes   { 0ull };
@@ -957,6 +958,18 @@ void CreateDescriptorHeap()
                 &g_DescriptorHeap.pMemory
             )
         );
+
+        // Map memory to host
+        ThrowIfFailed(
+            vkMapMemory(
+                g_pDevice,
+                g_DescriptorHeap.pMemory,
+                0ull,
+                g_DescriptorHeap.HeapSizeInBytes,
+                0u,
+                reinterpret_cast<void**>(& g_DescriptorHeap.pHeapStartHostMemoryAddress)
+            )
+        );
     }
 
     // Bind memory
@@ -1122,7 +1135,58 @@ void CreateStorageImage()
 
     // Write descriptor
     {
+        // Image view create info
+		VkImageViewCreateInfo viewCreateInfo{};
+		viewCreateInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		viewCreateInfo.image                           = g_StorageImage.pImage;
+		viewCreateInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+		viewCreateInfo.format                          = VK_FORMAT_R8_UNORM;
+		viewCreateInfo.components.r                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		viewCreateInfo.components.g                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		viewCreateInfo.components.b                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		viewCreateInfo.components.a                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		// - Subresource
+		viewCreateInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+		viewCreateInfo.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+		viewCreateInfo.subresourceRange.baseArrayLayer = 0u;
+		viewCreateInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+		viewCreateInfo.subresourceRange.baseMipLevel   = 0u;
+		viewCreateInfo.flags                           = 0u;
+        // - Usage create info
+        VkImageViewUsageCreateInfo usageCreateInfo{};
+        usageCreateInfo.sType                          = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+        usageCreateInfo.usage                          = VK_IMAGE_USAGE_STORAGE_BIT;
+        usageCreateInfo.pNext                          = VK_NULL_HANDLE;
+		viewCreateInfo.pNext                           = &usageCreateInfo;
 
+		// Image descriptor info
+		VkImageDescriptorInfoEXT imageDescriptorInfo{};
+		imageDescriptorInfo.sType  = VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT;
+		imageDescriptorInfo.layout = VK_IMAGE_LAYOUT_GENERAL;
+		imageDescriptorInfo.pView  = &viewCreateInfo;
+		imageDescriptorInfo.pNext  = VK_NULL_HANDLE;;
+
+		// Descriptor info
+		VkResourceDescriptorInfoEXT resourceDescriptorInfo{};
+		resourceDescriptorInfo.sType       = VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT;
+		resourceDescriptorInfo.type        = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		resourceDescriptorInfo.data.pImage = &imageDescriptorInfo;
+		resourceDescriptorInfo.pNext       = VK_NULL_HANDLE;
+
+		// Host address range
+		VkHostAddressRangeEXT hostAddressRange{};
+		hostAddressRange.address = g_DescriptorHeap.pHeapStartHostMemoryAddress + g_DescriptorHeap.ImageDescRangeOffsetInBytes;
+		hostAddressRange.size    = g_DescriptorHeap.ImageDescSizeInBytes;
+
+        // Write
+        ThrowIfFailed(
+            g_vkWriteResourceDescriptorsEXT(
+                g_pDevice,
+                1u,
+                &resourceDescriptorInfo,
+                &hostAddressRange
+            )
+        );
     }
 }
 //
@@ -1151,7 +1215,7 @@ void Init()
     std::cout << "Finished app init\n\n";
 }
 
-// TODO: SHADER_DEBUG_INFO and MAPPING_CONSTANT_OFFSET CMake options
+// TODO: SHADER_DEBUG_INFO and CONSTANT_OFFSET_SET_AND_BINDING_MAPPING CMake options
 
 // Dispatch
 void Dispatch()
