@@ -1398,7 +1398,8 @@ void CreatePipeline()
     }
 
     // Compute pipeline create info
-    VkComputePipelineCreateInfo pipelineCreateInfo{};
+    VkComputePipelineCreateInfo      pipelineCreateInfo {};
+    VkPipelineCreateFlags2CreateInfo createFlags2       {};
     {
         pipelineCreateInfo.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
 	    // - No pipeline layout with VK_EXT_descriptor_heap
@@ -1410,7 +1411,6 @@ void CreatePipeline()
         pipelineCreateInfo.basePipelineIndex  = 0u;
         pipelineCreateInfo.flags              = 0u;
 	    // - Create flags 2
-        VkPipelineCreateFlags2CreateInfo createFlags2{};
         createFlags2.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO;
         createFlags2.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
         createFlags2.pNext = VK_NULL_HANDLE;
