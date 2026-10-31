@@ -21,11 +21,11 @@ uint32_t                                g_QueueFamilyID              {};
 VkQueue                                 g_pQueue                     { VK_NULL_HANDLE };
 VkCommandPool                           g_pCmdPool                   { VK_NULL_HANDLE };
 VkCommandBuffer                         g_pCmdBuffer                 { VK_NULL_HANDLE };
-struct StorageImage                                                  
+struct Image                                                  
 {                                                                    
     VkImage                             pImage                       { VK_NULL_HANDLE };
     VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
-}                                       g_StorageImage               {};
+}                                       g_Image                      {};
 struct DescriptorHeap 
 {                     
     VkBuffer                            pBuffer                      { VK_NULL_HANDLE };
@@ -1066,7 +1066,7 @@ void CreateDescriptorHeap()
     }
 }
 //
-void CreateStorageImage()
+void CreateImage()
 {
     // Create the image
     {
@@ -1098,15 +1098,15 @@ void CreateStorageImage()
                 g_pDevice,
                 &createInfo,
                 VK_NULL_HANDLE,
-                &g_StorageImage.pImage
+                &g_Image.pImage
             )
         );
 
         // Name
         SetObjectName(
-            reinterpret_cast<uint64_t>(g_StorageImage.pImage),
+            reinterpret_cast<uint64_t>(g_Image.pImage),
             VK_OBJECT_TYPE_IMAGE,
-            "Image: Storage Image",
+            "Image: Test Image",
             g_pDevice
         );
     }
@@ -1120,7 +1120,7 @@ void CreateStorageImage()
         VkMemoryRequirements memoryRequirements{};
         vkGetImageMemoryRequirements(
             g_pDevice,
-            g_StorageImage.pImage,
+            g_Image.pImage,
             &memoryRequirements
         );
 
@@ -1150,7 +1150,7 @@ void CreateStorageImage()
                 g_pDevice,
                 &allocInfo,
                 VK_NULL_HANDLE,
-                &g_StorageImage.pMemory
+                &g_Image.pMemory
             )
         );
     }
@@ -1160,8 +1160,8 @@ void CreateStorageImage()
         // Bind info
         VkBindImageMemoryInfo bindInfo{};
         bindInfo.sType        = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
-        bindInfo.image        = g_StorageImage.pImage;
-        bindInfo.memory       = g_StorageImage.pMemory;
+        bindInfo.image        = g_Image.pImage;
+        bindInfo.memory       = g_Image.pMemory;
         bindInfo.memoryOffset = 0ull;
         bindInfo.pNext        = VK_NULL_HANDLE;
 
@@ -1180,7 +1180,7 @@ void CreateStorageImage()
         // Image view create info
 		VkImageViewCreateInfo viewCreateInfo{};
 		viewCreateInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		viewCreateInfo.image                           = g_StorageImage.pImage;
+		viewCreateInfo.image                           = g_Image.pImage;
 		viewCreateInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
 		viewCreateInfo.format                          = VK_FORMAT_R8_UNORM;
 		viewCreateInfo.components.r                    = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -1376,7 +1376,7 @@ void Init()
     LoadDeviceExtensionFunctions();
     CreateCommandObjects();
     CreateDescriptorHeap();
-    CreateStorageImage();
+    CreateImage();
     CreatePipeline();
 
     std::cout << "Finished app init\n\n";
@@ -1463,12 +1463,12 @@ void Dispatch()
     }
 #endif
 
-    // Transition storage image
+    // Transition image to storage
     {
         // Barrier
 		VkImageMemoryBarrier2 imageMemBarrier2{};
 		imageMemBarrier2.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-		imageMemBarrier2.image                           = g_StorageImage.pImage;
+		imageMemBarrier2.image                           = g_Image.pImage;
 		imageMemBarrier2.pNext                           = VK_NULL_HANDLE;
 		// - Subresource
 		imageMemBarrier2.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -1568,10 +1568,10 @@ void CleanUp()
         vkFreeMemory(g_pDevice, g_DescriptorHeap.pMemory, VK_NULL_HANDLE);
     if (g_DescriptorHeap.pBuffer)
         vkDestroyBuffer(g_pDevice, g_DescriptorHeap.pBuffer, VK_NULL_HANDLE);
-    if (g_StorageImage.pMemory)
-        vkFreeMemory(g_pDevice, g_StorageImage.pMemory, VK_NULL_HANDLE);
-    if (g_StorageImage.pImage)
-        vkDestroyImage(g_pDevice, g_StorageImage.pImage, VK_NULL_HANDLE);
+    if (g_Image.pMemory)
+        vkFreeMemory(g_pDevice, g_Image.pMemory, VK_NULL_HANDLE);
+    if (g_Image.pImage)
+        vkDestroyImage(g_pDevice, g_Image.pImage, VK_NULL_HANDLE);
     if (g_pCmdPool)
         vkDestroyCommandPool(g_pDevice, g_pCmdPool, VK_NULL_HANDLE);
     if (g_pDevice)
