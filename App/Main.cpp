@@ -25,20 +25,35 @@ struct Image
 {                                                                    
     VkImage                             pImage                       { VK_NULL_HANDLE };
     VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
+    uint64_t                            StorageDescHeapOffsetInBytes { 0u };
 }                                       g_Image                      {};
 struct DescriptorHeap 
-{                     
+{   
+    // Backing buffer
     VkBuffer                            pBuffer                      { VK_NULL_HANDLE };
     VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
+
+    // Heap start memory address
+    // - Host
     uint8_t*                            pHeapStartHostMemoryAddress  { nullptr };
+    // - Device
     uint64_t                            HeapStartDeviceMemoryAddress { 0ull };
+
+    // Heap size
     uint64_t                            HeapSizeInBytes              { 0ull };
+
+    // Reserved range
     uint64_t                            ReservedRangeOffsetInBytes   { 0ull };
     uint64_t                            ReservedRangeSizeInBytes     { 0ull };
+
+    // Image descriptor range in heap
     uint64_t                            ImageDescRangeOffsetInBytes  { 0ull };
     uint64_t                            ImageDescSizeInBytes         { 0ull };
-    uint32_t                            PushDataOffset               { 0u };
+    uint32_t                            ImageDescCount               { 2u };
+
+    // Binding
     VkDescriptorSetAndBindingMappingEXT SetAndBindingMapping         {};
+    uint32_t                            PushDataOffset               { 0u };
 }                                       g_DescriptorHeap             {};
 VkPipeline                              g_pPipeline                  { VK_NULL_HANDLE };
 
@@ -849,11 +864,8 @@ void CreateDescriptorHeap()
 	    currentHeapOffsetInBytes += g_DescriptorHeap.ReservedRangeSizeInBytes;
     }
 
-    // Account for descriptor
+    // Account for image descriptors
     {
-        // -> We need a resource descriptor heap with only a single
-        //    image descriptor
-
         // Align current offset to image descriptor alignment
         currentHeapOffsetInBytes = AlignUp(
             currentHeapOffsetInBytes,
@@ -861,17 +873,18 @@ void CreateDescriptorHeap()
         );
 
         // Set image descriptor range offset
-        // -> This is where we write the descriptor
+        // -> This is where we write the descriptors
         g_DescriptorHeap.ImageDescRangeOffsetInBytes = currentHeapOffsetInBytes;
 
         // Set image descriptor size
         g_DescriptorHeap.ImageDescSizeInBytes = descriptorHeapProperties.imageDescriptorSize;
 
-        // -> We do not need the imageDescriptorAlignment an longer since
-        //    we only write a single descriptor in this app.
+        // -> We do not need the imageDescriptorAlignment since it is a power of two
+        //    and <= imageDescriptorSize, i.e., we can make the descritpor slots
+        //    imageDescriptorSize-wide.
 
-        // Adjust the current heap offset for the descriptor size
-        currentHeapOffsetInBytes += g_DescriptorHeap.ImageDescSizeInBytes;
+        // Adjust the current heap offset for the descriptors
+        currentHeapOffsetInBytes += g_DescriptorHeap.ImageDescSizeInBytes * g_DescriptorHeap.ImageDescCount;
     }
 
     // Set descriptor heap size
@@ -1082,7 +1095,7 @@ void CreateImage()
 	    createInfo.arrayLayers           = 1u;
 	    createInfo.mipLevels             = 1u;
 	    createInfo.format                = VK_FORMAT_R8_UNORM;
-	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT;
+	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 	    createInfo.initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
 	    createInfo.queueFamilyIndexCount = 0;
@@ -1175,58 +1188,119 @@ void CreateImage()
         );
     }
 
-    // Write descriptor
+    // Write descriptors
     {
-        // Image view create info
-		VkImageViewCreateInfo viewCreateInfo{};
-		viewCreateInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		viewCreateInfo.image                           = g_Image.pImage;
-		viewCreateInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-		viewCreateInfo.format                          = VK_FORMAT_R8_UNORM;
-		viewCreateInfo.components.r                    = VK_COMPONENT_SWIZZLE_IDENTITY;
-		viewCreateInfo.components.g                    = VK_COMPONENT_SWIZZLE_IDENTITY;
-		viewCreateInfo.components.b                    = VK_COMPONENT_SWIZZLE_IDENTITY;
-		viewCreateInfo.components.a                    = VK_COMPONENT_SWIZZLE_IDENTITY;
-		// - Subresource
-		viewCreateInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-		viewCreateInfo.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
-		viewCreateInfo.subresourceRange.baseArrayLayer = 0u;
-		viewCreateInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
-		viewCreateInfo.subresourceRange.baseMipLevel   = 0u;
-		viewCreateInfo.flags                           = 0u;
-        // - Usage create info
-        VkImageViewUsageCreateInfo usageCreateInfo{};
-        usageCreateInfo.sType                          = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
-        usageCreateInfo.usage                          = VK_IMAGE_USAGE_STORAGE_BIT;
-        usageCreateInfo.pNext                          = VK_NULL_HANDLE;
-		viewCreateInfo.pNext                           = &usageCreateInfo;
+        // Data passed to descriptor creation
+        std::vector<VkHostAddressRangeEXT>       hostAddressRanges;
+        std::vector<VkResourceDescriptorInfoEXT> resourceDescriptorInfos;
+        // - Associated data referenced by descriptor infos
+        std::vector<VkImageDescriptorInfoEXT>    imageDescriptorInfos;
+        std::vector<VkImageViewCreateInfo>       imageViewCreateInfos;
+        std::vector<VkImageViewUsageCreateInfo>  imageViewUsageCreateInfos;
 
-		// Image descriptor info
-		VkImageDescriptorInfoEXT imageDescriptorInfo{};
-		imageDescriptorInfo.sType  = VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT;
-		imageDescriptorInfo.layout = VK_IMAGE_LAYOUT_GENERAL;
-		imageDescriptorInfo.pView  = &viewCreateInfo;
-		imageDescriptorInfo.pNext  = VK_NULL_HANDLE;;
+        // Reserve
+        hostAddressRanges.reserve(g_DescriptorHeap.ImageDescCount);
+        resourceDescriptorInfos.reserve(g_DescriptorHeap.ImageDescCount);
+        imageDescriptorInfos.reserve(g_DescriptorHeap.ImageDescCount);
+        imageViewCreateInfos.reserve(g_DescriptorHeap.ImageDescCount);
+        imageViewUsageCreateInfos.reserve(g_DescriptorHeap.ImageDescCount);
 
-		// Descriptor info
-		VkResourceDescriptorInfoEXT resourceDescriptorInfo{};
-		resourceDescriptorInfo.sType       = VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT;
-		resourceDescriptorInfo.type        = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-		resourceDescriptorInfo.data.pImage = &imageDescriptorInfo;
-		resourceDescriptorInfo.pNext       = VK_NULL_HANDLE;
+        // Keep track of current byte offset in heap
+        uint64_t currentHeapByteOffset { g_DescriptorHeap.ImageDescRangeOffsetInBytes };
 
-		// Host address range
-		VkHostAddressRangeEXT hostAddressRange{};
-		hostAddressRange.address = g_DescriptorHeap.pHeapStartHostMemoryAddress + g_DescriptorHeap.ImageDescRangeOffsetInBytes;
-		hostAddressRange.size    = g_DescriptorHeap.ImageDescSizeInBytes;
+        // Helper function
+        auto AddDescriptor = [
+            &hostAddressRanges,
+            &resourceDescriptorInfos,
+            &imageDescriptorInfos,
+            &imageViewCreateInfos,
+            &imageViewUsageCreateInfos](
+                VkImageUsageFlags imageUsage,
+                VkDescriptorType descriptorType,
+                uint64_t currentHeapByteOffset)
+            {
+                // Usage create info
+                VkImageViewUsageCreateInfo usageCreateInfo{};
+                usageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+                usageCreateInfo.usage = imageUsage;
+                usageCreateInfo.pNext = VK_NULL_HANDLE;
+                // - Add to array
+                imageViewUsageCreateInfos.push_back(usageCreateInfo);
+
+                // Image view create info
+		        VkImageViewCreateInfo viewCreateInfo{};
+		        viewCreateInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		        viewCreateInfo.image                           = g_Image.pImage;
+		        viewCreateInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+		        viewCreateInfo.format                          = VK_FORMAT_R8_UNORM;
+		        viewCreateInfo.components.r                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		        viewCreateInfo.components.g                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		        viewCreateInfo.components.b                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		        viewCreateInfo.components.a                    = VK_COMPONENT_SWIZZLE_IDENTITY;
+		        // - Subresource
+		        viewCreateInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+		        viewCreateInfo.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+		        viewCreateInfo.subresourceRange.baseArrayLayer = 0u;
+		        viewCreateInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+		        viewCreateInfo.subresourceRange.baseMipLevel   = 0u;
+		        viewCreateInfo.flags                           = 0u;
+		        viewCreateInfo.pNext                           = &(*imageViewUsageCreateInfos.rbegin());
+                // - Add to array
+                imageViewCreateInfos.push_back(viewCreateInfo);
+
+		        // Image descriptor info
+		        VkImageDescriptorInfoEXT imageDescriptorInfo{};
+		        imageDescriptorInfo.sType  = VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT;
+		        imageDescriptorInfo.layout = VK_IMAGE_LAYOUT_GENERAL;
+		        imageDescriptorInfo.pView  = &(*imageViewCreateInfos.rbegin());
+		        imageDescriptorInfo.pNext  = VK_NULL_HANDLE;
+                // - Add to array
+                imageDescriptorInfos.push_back(imageDescriptorInfo);
+
+		        // Descriptor info
+		        VkResourceDescriptorInfoEXT resourceDescriptorInfo{};
+		        resourceDescriptorInfo.sType       = VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT;
+		        resourceDescriptorInfo.type        = descriptorType;
+		        resourceDescriptorInfo.data.pImage = &(*imageDescriptorInfos.rbegin());
+		        resourceDescriptorInfo.pNext       = VK_NULL_HANDLE;
+                // - Add to array
+                resourceDescriptorInfos.push_back(resourceDescriptorInfo);
+
+		        // Host address range
+		        VkHostAddressRangeEXT hostAddressRange{};
+		        hostAddressRange.address = g_DescriptorHeap.pHeapStartHostMemoryAddress + currentHeapByteOffset;
+		        hostAddressRange.size    = g_DescriptorHeap.ImageDescSizeInBytes;
+                // - Add to array
+                hostAddressRanges.push_back(hostAddressRange);
+            };
+
+        // Add storage image descriptor
+        AddDescriptor(
+            VK_IMAGE_USAGE_STORAGE_BIT,
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            currentHeapByteOffset
+        );
+
+        // Set the offset to the storage descriptor
+        g_Image.StorageDescHeapOffsetInBytes = currentHeapByteOffset;
+
+        // Adjust heap offset
+        currentHeapByteOffset += g_DescriptorHeap.ImageDescSizeInBytes;
+
+        // Add sampled image descriptor
+        AddDescriptor(
+            VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            currentHeapByteOffset
+        );
 
         // Write
         ThrowIfFailed(
             g_vkWriteResourceDescriptorsEXT(
                 g_pDevice,
-                1u,
-                &resourceDescriptorInfo,
-                &hostAddressRange
+                g_DescriptorHeap.ImageDescCount,
+                resourceDescriptorInfos.data(),
+                hostAddressRanges.data()
             )
         );
     }
@@ -1450,9 +1524,9 @@ void Dispatch()
         const uint32_t descriptorRangeOffset {
             static_cast<uint32_t>(g_DescriptorHeap.ImageDescRangeOffsetInBytes)
         };
-		pushDataInfo.data.address = &descriptorRangeOffset;          // Push the offset to the descriptor range 
+		pushDataInfo.data.address = &g_Image.StorageDescHeapOffsetInBytes; // Push the offset to the storage descriptor
 		pushDataInfo.data.size    = 4u;
-		pushDataInfo.offset       = g_DescriptorHeap.PushDataOffset; // 0: There is only a single entry in our push data
+		pushDataInfo.offset       = g_DescriptorHeap.PushDataOffset;       // 0: There is only a single entry in our push data
 		pushDataInfo.pNext        = VK_NULL_HANDLE;
 
 		// Push data
