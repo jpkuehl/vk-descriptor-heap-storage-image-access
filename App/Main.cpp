@@ -426,6 +426,7 @@ void LoadInstanceExtensionFunctions()
 //
 void CreateDebugMessenger()
 {
+#if defined(DEBUG) | defined(_DEBUG)
     // Create info
     const VkDebugUtilsMessengerCreateInfoEXT createInfo { MakeDebugMessengerCreateInfo() };
 
@@ -438,6 +439,7 @@ void CreateDebugMessenger()
             &g_pDebugMessenger
         )
     );
+#endif
 }
 //
 void PickPhysicalDevice()
