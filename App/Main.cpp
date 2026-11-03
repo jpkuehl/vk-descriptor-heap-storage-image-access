@@ -27,6 +27,12 @@ struct Image
     VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
     uint64_t                            StorageDescHeapOffsetInBytes { 0u };
 }                                       g_Image                      {};
+struct ReadBackBuffer                                                  
+{                                                                    
+    VkBuffer                            pBuffer                      { VK_NULL_HANDLE };
+    VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
+    uint8_t*                            pHostMemoryAddress           { nullptr };
+}                                       g_ReadBackBuffer             {};
 struct DescriptorHeap 
 {   
     // Backing buffer
@@ -1098,7 +1104,7 @@ void CreateImage()
 	    createInfo.arrayLayers           = 1u;
 	    createInfo.mipLevels             = 1u;
 	    createInfo.format                = VK_FORMAT_R8_UNORM;
-	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	    createInfo.initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
 	    createInfo.queueFamilyIndexCount = 0;
@@ -1309,6 +1315,116 @@ void CreateImage()
     }
 }
 //
+void CreateReadBackBuffer()
+{
+    // Create buffer
+    {
+        // Create info
+        VkBufferCreateInfo createInfo{};
+	    createInfo.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	    createInfo.size                  = 4u;
+	    createInfo.usage                 = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+	    createInfo.queueFamilyIndexCount = 0;
+	    createInfo.pQueueFamilyIndices   = VK_NULL_HANDLE;
+	    createInfo.flags                 = 0u;
+	    createInfo.pNext                 = VK_NULL_HANDLE;
+
+        // Creation
+        ThrowIfFailed(
+            vkCreateBuffer(
+                g_pDevice,
+                &createInfo,
+                VK_NULL_HANDLE,
+                &g_ReadBackBuffer.pBuffer
+            )
+        );
+
+        // Name
+        SetObjectName(
+            reinterpret_cast<uint64_t>(g_ReadBackBuffer.pBuffer),
+            VK_OBJECT_TYPE_BUFFER,
+            "Buffer: Readback Buffer",
+            g_pDevice
+        );
+    }
+
+    // Allocate memory
+    {
+        // We allocate a dedicated memory block for a single resource
+        // -> Alignment is satisfied
+
+        // Get the memory requirements of the image
+        VkMemoryRequirements memoryRequirements{};
+        vkGetBufferMemoryRequirements(
+            g_pDevice,
+            g_ReadBackBuffer.pBuffer,
+            &memoryRequirements
+        );
+
+        // Find memory type ID
+        // -> We require host-visible + host-coherent memory.
+        const uint32_t memoryTypeID{
+             FindMemoryTypeID(
+                memoryRequirements.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                0u,
+                0u,
+                g_pPhysicalDevice
+            )
+        };
+
+        // Allocate info
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.memoryTypeIndex = memoryTypeID;
+        allocInfo.allocationSize  = memoryRequirements.size;
+	    allocInfo.pNext           = VK_NULL_HANDLE;
+
+        // Allocation
+        ThrowIfFailed(
+            vkAllocateMemory(
+                g_pDevice,
+                &allocInfo,
+                VK_NULL_HANDLE,
+                &g_ReadBackBuffer.pMemory
+            )
+        );
+
+        // Map memory to host
+        ThrowIfFailed(
+            vkMapMemory(
+                g_pDevice,
+                g_ReadBackBuffer.pMemory,
+                0ull,
+                4u,
+                0u,
+                reinterpret_cast<void**>(&g_ReadBackBuffer.pHostMemoryAddress)
+            )
+        );
+    }
+
+    // Bind memory
+    {
+        // Bind info
+        VkBindBufferMemoryInfo bindInfo{};
+        bindInfo.sType        = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO;
+        bindInfo.buffer       = g_ReadBackBuffer.pBuffer;
+        bindInfo.memory       = g_ReadBackBuffer.pMemory;
+        bindInfo.memoryOffset = 0ull;
+        bindInfo.pNext        = VK_NULL_HANDLE;
+
+        // Bind
+        ThrowIfFailed(
+            vkBindBufferMemory2(
+                g_pDevice,
+                1u,
+                &bindInfo
+            )
+        );
+    }
+}
+//
 void CreatePipeline()
 {
     // Helper
@@ -1454,6 +1570,7 @@ void Init()
     CreateCommandObjects();
     CreateDescriptorHeap();
     CreateImage();
+    CreateReadBackBuffer();
     CreatePipeline();
 
     std::cout << "Finished app init\n\n";
@@ -1463,6 +1580,58 @@ void Init()
 void Dispatch()
 {
     std::cout << "Dispatching...\n";
+
+    // Helper
+    auto ScheduleImageBarrier = [](
+        VkImageLayout srcLayout,
+        VkAccessFlags2 srcAccessFlags2,
+        VkPipelineStageFlags2 srcPipelineStageFlags,
+        VkImageLayout dstLayout,
+        VkAccessFlags2 dstAccessFlags2,
+        VkPipelineStageFlags2 dstPipelineStageFlags)
+        {
+            // Barrier
+		    VkImageMemoryBarrier2 imageMemBarrier2{};
+		    imageMemBarrier2.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+		    imageMemBarrier2.image                           = g_Image.pImage;
+		    imageMemBarrier2.pNext                           = VK_NULL_HANDLE;
+		    // - Subresource
+		    imageMemBarrier2.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+		    imageMemBarrier2.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+		    imageMemBarrier2.subresourceRange.baseArrayLayer = 0u;
+		    imageMemBarrier2.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+		    imageMemBarrier2.subresourceRange.baseMipLevel   = 0u;
+		    // - State transition
+		    //   - Src
+		    imageMemBarrier2.oldLayout                       = srcLayout;
+		    imageMemBarrier2.srcAccessMask                   = srcAccessFlags2;
+		    imageMemBarrier2.srcStageMask                    = srcPipelineStageFlags;
+		    //   - Dst
+		    imageMemBarrier2.newLayout                       = dstLayout;
+		    imageMemBarrier2.dstAccessMask                   = dstAccessFlags2;
+		    imageMemBarrier2.dstStageMask                    = dstPipelineStageFlags;
+		    // - Queue family ownership transfer
+            imageMemBarrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            imageMemBarrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+            // Dependency info
+            VkDependencyInfo dependencyInfo{};
+	        dependencyInfo.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+	        dependencyInfo.imageMemoryBarrierCount  = 1u;
+	        dependencyInfo.pImageMemoryBarriers     = &imageMemBarrier2;
+	        dependencyInfo.bufferMemoryBarrierCount = 0u;
+	        dependencyInfo.pBufferMemoryBarriers    = VK_NULL_HANDLE;
+	        dependencyInfo.memoryBarrierCount       = 0u;
+	        dependencyInfo.pMemoryBarriers          = VK_NULL_HANDLE;
+	        dependencyInfo.dependencyFlags          = 0u;
+	        dependencyInfo.pNext                    = VK_NULL_HANDLE;
+
+		    // Schedule
+            vkCmdPipelineBarrier2(
+                g_pCmdBuffer,
+                &dependencyInfo
+            );
+        };
 
     // Reset command pool
     ThrowIfFailed(
@@ -1541,49 +1710,14 @@ void Dispatch()
 #endif
 
     // Transition image to storage
-    {
-        // Barrier
-		VkImageMemoryBarrier2 imageMemBarrier2{};
-		imageMemBarrier2.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-		imageMemBarrier2.image                           = g_Image.pImage;
-		imageMemBarrier2.pNext                           = VK_NULL_HANDLE;
-		// - Subresource
-		imageMemBarrier2.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-		imageMemBarrier2.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
-		imageMemBarrier2.subresourceRange.baseArrayLayer = 0u;
-		imageMemBarrier2.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
-		imageMemBarrier2.subresourceRange.baseMipLevel   = 0u;
-		// - State transition
-		//   - Src
-		imageMemBarrier2.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
-		imageMemBarrier2.srcAccessMask                   = VK_ACCESS_2_NONE;
-		imageMemBarrier2.srcStageMask                    = VK_PIPELINE_STAGE_2_NONE;
-		//   - Dst
-		imageMemBarrier2.newLayout                       = VK_IMAGE_LAYOUT_GENERAL;
-		imageMemBarrier2.dstAccessMask                   = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-		imageMemBarrier2.dstStageMask                    = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-		// - Queue family ownership transfer
-        imageMemBarrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        imageMemBarrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-        // Dependency info
-        VkDependencyInfo dependencyInfo{};
-	    dependencyInfo.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-	    dependencyInfo.imageMemoryBarrierCount  = 1u;
-	    dependencyInfo.pImageMemoryBarriers     = &imageMemBarrier2;
-	    dependencyInfo.bufferMemoryBarrierCount = 0u;
-	    dependencyInfo.pBufferMemoryBarriers    = VK_NULL_HANDLE;
-	    dependencyInfo.memoryBarrierCount       = 0u;
-	    dependencyInfo.pMemoryBarriers          = VK_NULL_HANDLE;
-	    dependencyInfo.dependencyFlags          = 0u;
-	    dependencyInfo.pNext                    = VK_NULL_HANDLE;
-
-		// Schedule
-        vkCmdPipelineBarrier2(
-            g_pCmdBuffer,
-            &dependencyInfo
-        );
-    }
+    ScheduleImageBarrier(
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_ACCESS_2_NONE,
+        VK_PIPELINE_STAGE_2_NONE,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+    );
 
     // Dispatch
     vkCmdDispatch(
@@ -1592,6 +1726,49 @@ void Dispatch()
         1u,
         1u
     );
+
+    // Transition image to copy src
+    ScheduleImageBarrier(
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_ACCESS_2_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT
+    );
+
+    // Write back the image data
+    {
+        // Region
+        VkBufferImageCopy2 region{};
+        region.sType                           = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2;
+        region.bufferOffset                    = 0u;
+        region.bufferRowLength                 = 0u; // Image data tightly packed
+        region.bufferImageHeight               = 0u; // Image data tightly packed
+        region.imageExtent                     = { 1u, 1u, 1u };
+        region.imageOffset                     = { 0, 0, 0 };
+        region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.baseArrayLayer = 0u;
+        region.imageSubresource.layerCount     = 1u;
+        region.imageSubresource.mipLevel       = 0u;
+        region.pNext                           = VK_NULL_HANDLE;
+
+        // Copy info
+        VkCopyImageToBufferInfo2 imageToBufferInfo2{};
+        imageToBufferInfo2.sType          = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2;
+        imageToBufferInfo2.srcImage       = g_Image.pImage;
+        imageToBufferInfo2.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        imageToBufferInfo2.dstBuffer      = g_ReadBackBuffer.pBuffer;
+        imageToBufferInfo2.pRegions       = &region;
+        imageToBufferInfo2.regionCount    = 1u;
+        imageToBufferInfo2.pNext          = VK_NULL_HANDLE;
+
+        // Copy
+        vkCmdCopyImageToBuffer2(
+            g_pCmdBuffer,
+            &imageToBufferInfo2
+        );
+    }
 
     // End command buffer
     ThrowIfFailed(
@@ -1633,6 +1810,11 @@ void Dispatch()
     // Sync
     vkDeviceWaitIdle(g_pDevice);
 
+    // Print the value
+    const uint8_t rawValue     { *g_ReadBackBuffer.pHostMemoryAddress };
+    const float   writtenValue { rawValue / 255.0f };
+    std::cout << "    Written value: " << writtenValue << '\n';
+
     std::cout << "...Success!\n\n";
 }
 
@@ -1645,6 +1827,10 @@ void CleanUp()
         vkFreeMemory(g_pDevice, g_DescriptorHeap.pMemory, VK_NULL_HANDLE);
     if (g_DescriptorHeap.pBuffer)
         vkDestroyBuffer(g_pDevice, g_DescriptorHeap.pBuffer, VK_NULL_HANDLE);
+    if (g_ReadBackBuffer.pMemory)
+        vkFreeMemory(g_pDevice, g_ReadBackBuffer.pMemory, VK_NULL_HANDLE);
+    if (g_ReadBackBuffer.pBuffer)
+        vkDestroyBuffer(g_pDevice, g_ReadBackBuffer.pBuffer, VK_NULL_HANDLE);
     if (g_Image.pMemory)
         vkFreeMemory(g_pDevice, g_Image.pMemory, VK_NULL_HANDLE);
     if (g_Image.pImage)
