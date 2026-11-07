@@ -6,12 +6,24 @@
 #include <vector>
 #include <unordered_map>
 #include <fstream>
+#include <iomanip>
 
 // Vulkan
 #include <vulkan/vulkan.h>
 #ifndef VULKAN_TARGET_API_VERSION
 #error "VULKAN_TARGET_API_VERSION is not defined"
 #endif
+
+// Literals
+constexpr uint64_t operator"" _KiB(uint64_t x) {
+    return x << 10;
+}
+constexpr uint64_t operator"" _MiB(uint64_t x) {
+    return x << 20;
+}
+constexpr uint64_t operator"" _GiB(uint64_t x) {
+    return x << 30;
+}
 
 // Core app components
 VkInstance                              g_pInstance                  { VK_NULL_HANDLE };
@@ -96,16 +108,74 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
     std::string type;
     switch (messageType)
     {
-    case VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT:       type = "GENERAL";     break;
-    case VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT:    type = "VALIDATION";  break;
-    case VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT:   type = "PERFORMANCE"; break;
-    default:                                                type = "UNKOWN";      break;
+    case VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT:                type = "GENERAL";         break;
+    case VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT:             type = "VALIDATION";      break;
+    case VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT:            type = "PERFORMANCE";     break;
+    case VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT: type = "ADDRESS BINDING"; break;
+    default:                                                         type = "UNKOWN";          break;
     }
 
     std::cout << "\nVulkan Debug Message\n"
         << "[Severity] " << severity << '\n'
         << "[Type]     " << type << '\n'
         << "[Message]  " << pCallbackData->pMessage << "\n";
+
+    // Handle address binding message
+    if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT)
+	{
+		// Walk the pNext chain, identifying structures by sType.
+        const auto* pNext =
+            static_cast<const VkBaseInStructure*>(pCallbackData->pNext);
+
+        while (pNext)
+        {
+            if (pNext->sType ==
+                VK_STRUCTURE_TYPE_DEVICE_ADDRESS_BINDING_CALLBACK_DATA_EXT)
+            {
+                const auto* pBinding =
+                    reinterpret_cast<
+                        const VkDeviceAddressBindingCallbackDataEXT*>(pNext);
+
+				std::cout
+					<< "[Address binding] "
+					<< (pBinding->bindingType == VK_DEVICE_ADDRESS_BINDING_TYPE_BIND_EXT
+						? "BIND"
+						: "UNBIND")
+					<< "\n"
+					<< "  Base address: 0x"
+					<< std::hex << std::setfill('0') << std::setw(16)
+					<< pBinding->baseAddress
+					<< "\n"
+					<< "  Size:         0x"
+					<< pBinding->size
+					<< "\n"
+					<< "  Flags:        0x"
+					<< pBinding->flags
+					<< std::dec << std::setfill(' ')
+					<< "\n";
+
+				for (uint32_t i = 0; i < pCallbackData->objectCount; ++i)
+				{
+					const auto& object = pCallbackData->pObjects[i];
+
+					std::cout
+						<< "  Object type:  "
+						<< static_cast<int>(object.objectType)
+						<< "\n"
+						<< "  Handle:       0x"
+						<< std::hex << std::setfill('0') << std::setw(16)
+						<< object.objectHandle
+						<< std::dec << std::setfill(' ')
+						<< "\n"
+						<< "  Name:         "
+						<< (object.pObjectName ? object.pObjectName : "(unnamed)")
+						<< "\n";
+				}
+            }
+
+			pNext = pNext->pNext;
+        }
+	}
 
     // Boolean indicates if Vulkan call that triggered the validation layer callback
     // should be aborted. VK_TRUE is normally only used to test the validation layers
@@ -148,7 +218,8 @@ VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfo()
         | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
 	createInfo.messageType     =
 		  VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
-		| VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		| VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
+        | VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT;
 	createInfo.pfnUserCallback = DebugCallback;
 	createInfo.pUserData       = VK_NULL_HANDLE;
 	createInfo.pNext           = VK_NULL_HANDLE;
@@ -158,14 +229,14 @@ VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfo()
 }
 
 // Error helper
-void ThrowIfFailed(VkResult result)
+void ThrowIfFailed(VkResult result, int line)
 {
     // Error message
     std::ostringstream sstream;
     sstream << "Vulkan failed with VkResult "
         << std::to_string(result)
         << " at line "
-        << __LINE__
+        << line
         << '\n';
 
     if (result != VK_SUCCESS)
@@ -273,7 +344,8 @@ void SetObjectName(
         g_vkSetDebugUtilsObjectNameEXT(
             pDevice,
             &nameInfo
-        )
+        ),
+        __LINE__
     );
 }
 
@@ -287,11 +359,13 @@ void CreateInstance()
             // Query the supported extensions
             uint32_t supportedExtensionCount;
             ThrowIfFailed(
-                vkEnumerateInstanceExtensionProperties(NULL, &supportedExtensionCount, VK_NULL_HANDLE)
+                vkEnumerateInstanceExtensionProperties(NULL, &supportedExtensionCount, VK_NULL_HANDLE),
+                __LINE__
             );
             std::vector<VkExtensionProperties> supportedExtensions(supportedExtensionCount);
             ThrowIfFailed(
-                vkEnumerateInstanceExtensionProperties(NULL, &supportedExtensionCount, supportedExtensions.data())
+                vkEnumerateInstanceExtensionProperties(NULL, &supportedExtensionCount, supportedExtensions.data()),
+                __LINE__
             );
 
             // Check them against the ones we require
@@ -323,11 +397,13 @@ void CreateInstance()
             // Query the supported layers
             uint32_t supportedLayerCount;
             ThrowIfFailed(
-                vkEnumerateInstanceLayerProperties(&supportedLayerCount, VK_NULL_HANDLE)
+                vkEnumerateInstanceLayerProperties(&supportedLayerCount, VK_NULL_HANDLE),
+                __LINE__
             );
             std::vector<VkLayerProperties> supportedLayers(supportedLayerCount);
             ThrowIfFailed(
-                vkEnumerateInstanceLayerProperties(&supportedLayerCount, supportedLayers.data())
+                vkEnumerateInstanceLayerProperties(&supportedLayerCount, supportedLayers.data()),
+                __LINE__
             );
 
             // Check them against the ones we require
@@ -401,7 +477,8 @@ void CreateInstance()
             &createInfo,
             VK_NULL_HANDLE,
             &g_pInstance
-        )
+        ),
+        __LINE__
     );
 }
 //
@@ -444,7 +521,8 @@ void CreateDebugMessenger()
             &createInfo,
             VK_NULL_HANDLE,
             &g_pDebugMessenger
-        )
+        ),
+        __LINE__
     );
 #endif
 }
@@ -453,10 +531,10 @@ void PickPhysicalDevice()
 {
 	// Get the physical devices
 	uint32_t deviceCount;
-	ThrowIfFailed(vkEnumeratePhysicalDevices(g_pInstance, &deviceCount, VK_NULL_HANDLE));
+	ThrowIfFailed(vkEnumeratePhysicalDevices(g_pInstance, &deviceCount, VK_NULL_HANDLE), __LINE__);
 	std::vector<VkPhysicalDevice> availableDevices;
     availableDevices.resize(deviceCount);
-	ThrowIfFailed(vkEnumeratePhysicalDevices(g_pInstance, &deviceCount, availableDevices.data()));
+	ThrowIfFailed(vkEnumeratePhysicalDevices(g_pInstance, &deviceCount, availableDevices.data()), __LINE__);
 
     // Device infos
     struct DeviceInfo
@@ -507,7 +585,8 @@ void PickPhysicalDevice()
                 VK_NULL_HANDLE,
                 &supportedExtensionCount,
                 VK_NULL_HANDLE
-            )
+            ),
+            __LINE__
         );
         std::vector<VkExtensionProperties> supportedExtensionProperties(supportedExtensionCount);
         ThrowIfFailed(
@@ -516,13 +595,24 @@ void PickPhysicalDevice()
                 VK_NULL_HANDLE,
                 &supportedExtensionCount,
                 supportedExtensionProperties.data()
-            )
+            ),
+            __LINE__
         );
 
         // Query the physical device features 2 the device supports
+#if defined(DEBUG) | defined(_DEBUG)
+        // - Address binding report
+        VkPhysicalDeviceAddressBindingReportFeaturesEXT supportedAddressBindingReportFeatures {};
+        supportedAddressBindingReportFeatures.sType                = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT;
+        supportedAddressBindingReportFeatures.reportAddressBinding = VK_TRUE;
+        supportedAddressBindingReportFeatures.pNext                = VK_NULL_HANDLE;
+#endif
         // - Buffer device address
         VkPhysicalDeviceBufferDeviceAddressFeatures supportedBufferDeviceAddressFeatures{};
         supportedBufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+#if defined(DEBUG) | defined(_DEBUG)
+        supportedBufferDeviceAddressFeatures.pNext = &supportedAddressBindingReportFeatures;
+#endif
         // - Descriptor heap
         VkPhysicalDeviceDescriptorHeapFeaturesEXT supportedDescriptorHeapFeatures{};
         supportedDescriptorHeapFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
@@ -567,6 +657,19 @@ void PickPhysicalDevice()
             if (!supportedSynchronization2Features.synchronization2)
                 continue;
         }
+
+#if defined(DEBUG) | defined(_DEBUG)
+        // Check if device supports address binding report
+        {
+            // Check support of VK_EXT_device_address_binding_report extension
+            if (!CheckDeviceExtensionSupport("VK_EXT_device_address_binding_report", supportedExtensionProperties))
+                continue;
+
+            // Check support of associated feature
+            if (!supportedAddressBindingReportFeatures.reportAddressBinding)
+                continue;
+        }
+#endif
 
         // Add device info to map
         deviceIDToInfo.emplace(
@@ -686,7 +789,10 @@ void CreateDevice()
 	createInfo.pEnabledFeatures        = VK_NULL_HANDLE; // We use VkPhysicalDeviceFeatures2 in pNext, therefore we have to set nullptr here!	
 	// - Enabled extensions
     std::vector<const char*> enabledExtensionNames{
-        "VK_EXT_descriptor_heap"
+        "VK_EXT_descriptor_heap",
+#if defined(DEBUG) | defined(_DEBUG)
+        "VK_EXT_device_address_binding_report"
+#endif
     };
 	createInfo.enabledExtensionCount   = static_cast<uint32_t>(enabledExtensionNames.size());
 	createInfo.ppEnabledExtensionNames = enabledExtensionNames.data();
@@ -708,11 +814,21 @@ void CreateDevice()
 	// - Flags
 	createInfo.flags                   = 0;
     // - Physical device features 2
+#if defined(DEBUG) | defined(_DEBUG)
+    // -- Address binding report
+    VkPhysicalDeviceAddressBindingReportFeaturesEXT enabledAddressBindingReportFeatures {};
+    enabledAddressBindingReportFeatures.sType                = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT;
+    enabledAddressBindingReportFeatures.reportAddressBinding = VK_TRUE;
+    enabledAddressBindingReportFeatures.pNext                = VK_NULL_HANDLE;
+#endif
     // -- Buffer device address
     VkPhysicalDeviceBufferDeviceAddressFeatures enabledBufferDeviceAddressFeatures{};
     enabledBufferDeviceAddressFeatures.sType                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
     enabledBufferDeviceAddressFeatures.bufferDeviceAddress              = VK_TRUE;
     enabledBufferDeviceAddressFeatures.bufferDeviceAddressCaptureReplay = VK_TRUE;
+#if defined(DEBUG) | defined(_DEBUG)
+    enabledBufferDeviceAddressFeatures.pNext                            = &enabledAddressBindingReportFeatures;
+#endif
     // -- Descriptor heap
     VkPhysicalDeviceDescriptorHeapFeaturesEXT enabledDescriptorHeapFeatures{};
     enabledDescriptorHeapFeatures.sType                       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
@@ -738,7 +854,8 @@ void CreateDevice()
 			&createInfo,
 			VK_NULL_HANDLE,
 			&g_pDevice
-		)
+		),
+        __LINE__
 	);
 }
 //
@@ -792,7 +909,8 @@ void CreateCommandObjects()
                 &createInfo,
                 VK_NULL_HANDLE,
                 &g_pCmdPool
-            )
+            ),
+            __LINE__
 		);
     }
 
@@ -812,7 +930,8 @@ void CreateCommandObjects()
                 g_pDevice,
                 &allocInfo,
                 &g_pCmdBuffer
-            )
+            ),
+            __LINE__
 		);
     }
 }
@@ -919,7 +1038,8 @@ void CreateDescriptorHeap()
                 &createInfo,
                 VK_NULL_HANDLE,
                 &g_DescriptorHeap.pBuffer
-            )
+            ),
+            __LINE__
         );
 
         // Name
@@ -981,7 +1101,16 @@ void CreateDescriptorHeap()
                 &allocInfo,
                 VK_NULL_HANDLE,
                 &g_DescriptorHeap.pMemory
-            )
+            ),
+            __LINE__
+        );
+
+        // Name
+        SetObjectName(
+            reinterpret_cast<uint64_t>(g_DescriptorHeap.pMemory),
+            VK_OBJECT_TYPE_DEVICE_MEMORY,
+            "Memory: Descriptor Heap",
+            g_pDevice
         );
 
         // Map memory to host
@@ -993,7 +1122,8 @@ void CreateDescriptorHeap()
                 g_DescriptorHeap.HeapSizeInBytes,
                 0u,
                 reinterpret_cast<void**>(& g_DescriptorHeap.pHeapStartHostMemoryAddress)
-            )
+            ),
+            __LINE__
         );
     }
 
@@ -1013,7 +1143,8 @@ void CreateDescriptorHeap()
                 g_pDevice,
                 1u,
                 &bindInfo
-            )
+            ),
+            __LINE__
         );
     }
 
@@ -1121,7 +1252,8 @@ void CreateImage()
                 &createInfo,
                 VK_NULL_HANDLE,
                 &g_Image.pImage
-            )
+            ),
+            __LINE__
         );
 
         // Name
@@ -1173,7 +1305,16 @@ void CreateImage()
                 &allocInfo,
                 VK_NULL_HANDLE,
                 &g_Image.pMemory
-            )
+            ),
+            __LINE__
+        );
+
+        // Name
+        SetObjectName(
+            reinterpret_cast<uint64_t>(g_Image.pMemory),
+            VK_OBJECT_TYPE_DEVICE_MEMORY,
+            "Memory: Test Image",
+            g_pDevice
         );
     }
 
@@ -1193,7 +1334,8 @@ void CreateImage()
                 g_pDevice,
                 1u,
                 &bindInfo
-            )
+            ),
+            __LINE__
         );
     }
 
@@ -1310,7 +1452,8 @@ void CreateImage()
                 g_DescriptorHeap.ImageDescCount,
                 resourceDescriptorInfos.data(),
                 hostAddressRanges.data()
-            )
+            ),
+            __LINE__
         );
     }
 }
@@ -1337,7 +1480,8 @@ void CreateReadBackBuffer()
                 &createInfo,
                 VK_NULL_HANDLE,
                 &g_ReadBackBuffer.pBuffer
-            )
+            ),
+            __LINE__
         );
 
         // Name
@@ -1388,7 +1532,16 @@ void CreateReadBackBuffer()
                 &allocInfo,
                 VK_NULL_HANDLE,
                 &g_ReadBackBuffer.pMemory
-            )
+            ),
+            __LINE__
+        );
+
+        // Name
+        SetObjectName(
+            reinterpret_cast<uint64_t>(g_ReadBackBuffer.pMemory),
+            VK_OBJECT_TYPE_DEVICE_MEMORY,
+            "Memory: Readback Buffer",
+            g_pDevice
         );
 
         // Map memory to host
@@ -1400,7 +1553,8 @@ void CreateReadBackBuffer()
                 4u,
                 0u,
                 reinterpret_cast<void**>(&g_ReadBackBuffer.pHostMemoryAddress)
-            )
+            ),
+            __LINE__
         );
     }
 
@@ -1420,7 +1574,8 @@ void CreateReadBackBuffer()
                 g_pDevice,
                 1u,
                 &bindInfo
-            )
+            ),
+            __LINE__
         );
     }
 }
@@ -1487,7 +1642,8 @@ void CreatePipeline()
 				&createInfo,
 				VK_NULL_HANDLE,
 				&pShaderModule
-			)
+			),
+            __LINE__
 		);
     }
 
@@ -1543,7 +1699,8 @@ void CreatePipeline()
             &pipelineCreateInfo,
             VK_NULL_HANDLE,
             &g_pPipeline
-        )
+        ),
+        __LINE__
     );
 
     // Destroy shader module
@@ -1639,7 +1796,8 @@ void Dispatch()
             g_pDevice,
             g_pCmdPool,
             0u
-        )
+        ),
+        __LINE__
     );
 
     // Begin command buffer
@@ -1656,7 +1814,8 @@ void Dispatch()
             vkBeginCommandBuffer(
                 g_pCmdBuffer,
                 &beginInfo
-            )
+            ),
+            __LINE__
         );
     }
 
@@ -1772,7 +1931,8 @@ void Dispatch()
 
     // End command buffer
     ThrowIfFailed(
-        vkEndCommandBuffer(g_pCmdBuffer)
+        vkEndCommandBuffer(g_pCmdBuffer),
+        __LINE__
     );
 
     // Submit
@@ -1803,7 +1963,8 @@ void Dispatch()
 				1u,
 				&submitInfo2,
 				VK_NULL_HANDLE
-			)
+			),
+            __LINE__
 		);
     }
 
