@@ -17,8 +17,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Bin/Release)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_BINARY_DIR}/Bin/Debug)
 
 # Option flags
-option(SHADER_DEBUG_INFO                       "Compile shaders with debug information"                   OFF)
-option(CONSTANT_OFFSET_SET_AND_BINDING_MAPPING "VkDescriptorSetAndBindingMappingEXT with constant offset" OFF)
+option(SHADER_DEBUG_INFO "Compile shaders with debug information" OFF)
 
 ##################################################### Vulkan #####################################################
 # Check for Vulkan SDK and DXC shipped alongside it
@@ -152,11 +151,7 @@ target_compile_definitions(App PRIVATE
     VULKAN_TARGET_API_VERSION=VK_MAKE_API_VERSION\(0,${VULKAN_TARGET_VERSION_MAJOR},${VULKAN_TARGET_VERSION_MINOR},${VULKAN_TARGET_VERSION_PATCH}\)
     # - Shader binary file path for shader loading
     SHADER_BIN_FILE_PATH="${SHADER_OUTPUT_SPV}"
-
 )
-if (CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
-    target_compile_definitions(App PRIVATE CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
-endif()
 
 # Link Vulkan
 target_link_libraries(App PRIVATE Vulkan::Vulkan)

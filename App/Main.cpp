@@ -1167,18 +1167,8 @@ void CreateDescriptorHeap()
         g_DescriptorHeap.SetAndBindingMapping.resourceMask  = VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT;
         g_DescriptorHeap.SetAndBindingMapping.pNext         = VK_NULL_HANDLE;
 
-#if defined(CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
-        // CONSTANT OFFSET
-
-        g_DescriptorHeap.SetAndBindingMapping.source                                    = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-        // -> Instead of pushing the offset, we set it statically
-        g_DescriptorHeap.SetAndBindingMapping.sourceData.constantOffset.heapOffset      = g_DescriptorHeap.ImageDescRangeOffsetInBytes;
-        // - Byte stride between descriptors, but we only have single descriptor anyway
-        g_DescriptorHeap.SetAndBindingMapping.sourceData.constantOffset.heapArrayStride = g_DescriptorHeap.ImageDescSizeInBytes;
-#else
-        // PUSH INDEX
-
-        g_DescriptorHeap.SetAndBindingMapping.source                               = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+        // Push index configuration
+        g_DescriptorHeap.SetAndBindingMapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
         // -> In general, we have to use byte offsets here since each semantic
         //    can have different byte strides, so there is no universal byte
         //    stride for a descriptor.
@@ -1195,7 +1185,6 @@ void CreateDescriptorHeap()
         g_DescriptorHeap.SetAndBindingMapping.sourceData.pushIndex.heapArrayStride = g_DescriptorHeap.ImageDescSizeInBytes;
         // - No additional offset to the pushed offset
         g_DescriptorHeap.SetAndBindingMapping.sourceData.pushIndex.heapOffset      = 0u;
-#endif
 
         // Max push data size
         // -> We only have set a single 4-byte value
@@ -1833,7 +1822,6 @@ void Dispatch()
 
     // Push descriptor index
     // -> Only if we did not set it as constant offset
-#if !defined(CONSTANT_OFFSET_SET_AND_BINDING_MAPPING)
     {
         // Push data info
 		VkPushDataInfoEXT pushDataInfo{};
@@ -1853,7 +1841,6 @@ void Dispatch()
 			&pushDataInfo
 		);
     }
-#endif
 
     // Transition image to storage
     ScheduleImageBarrier(
@@ -1864,8 +1851,6 @@ void Dispatch()
         VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
     );
-
-    // TODO: Push image dimensions
 
     // Dispatch
     // -> Local threads: (8, 8, 1)
