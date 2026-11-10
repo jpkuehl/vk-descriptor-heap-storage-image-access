@@ -38,6 +38,8 @@ struct Image
     VkImage                             pImage                       { VK_NULL_HANDLE };
     VkDeviceMemory                      pMemory                      { VK_NULL_HANDLE };
     uint64_t                            StorageDescHeapOffsetInBytes { 0u };
+    static constexpr uint32_t           Width                        { 1280u };
+    static constexpr uint32_t           Height                       { 720u  };
 }                                       g_Image                      {};
 struct ReadBackBuffer                                                  
 {                                                                    
@@ -67,7 +69,8 @@ struct DescriptorHeap
     // Image descriptor range in heap
     uint64_t                            ImageDescRangeOffsetInBytes  { 0ull };
     uint64_t                            ImageDescSizeInBytes         { 0ull };
-    uint32_t                            ImageDescCount               { 2u };
+    // -> Single descriptor
+    uint32_t                            ImageDescCount               { 1u };
 
     // Binding
     VkDescriptorSetAndBindingMappingEXT SetAndBindingMapping         {};
@@ -187,27 +190,9 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
 // -> Required in different places
 VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfo()
 {
-    // This function is necessary because we need two debug messengers,
-	// one in general and another one to handle the validation layers for
+    // This function is a helper because we need two debug messengers,
+	// one general and another one to handle the validation layers for
 	// instance creation and destruction.
-
-	// Available severities:
-	// VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: Diagnostic message
-	// VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: Informational message
-	//     like the creation of a resource
-	// VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT : Message about
-	//     behavior that is not necessarily an error but very likely a bug in the
-	//     application
-	// VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT : Message about
-	//     behavior that is invalid and may cause crashes
-	// 
-    // Available types:
-    // VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT: Some event has happened
-    //     that is unrelated to the specification or performance
-    // VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT : Something has
-    //     happened that violates the specification or indicates a possible mistake
-    // VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT : Potential nonoptimal
-    //     use of Vulkan
 
 	VkDebugUtilsMessengerCreateInfoEXT createInfo{};
 	createInfo.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -1024,7 +1009,7 @@ void CreateDescriptorHeap()
         VkBufferCreateInfo createInfo{};
 	    createInfo.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 	    createInfo.size                  = g_DescriptorHeap.HeapSizeInBytes;
-	    createInfo.usage                 = VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;;
+	    createInfo.usage                 = VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
 	    createInfo.queueFamilyIndexCount = 0;
 	    createInfo.pQueueFamilyIndices   = VK_NULL_HANDLE;
@@ -1229,13 +1214,13 @@ void CreateImage()
         VkImageCreateInfo createInfo{};
 	    createInfo.sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	    createInfo.imageType             = VK_IMAGE_TYPE_2D;
-	    createInfo.extent.width          = 1u;
-	    createInfo.extent.height         = 1u;
+	    createInfo.extent.width          = g_Image.Width;
+	    createInfo.extent.height         = g_Image.Height;
 	    createInfo.extent.depth          = 1u;
 	    createInfo.arrayLayers           = 1u;
 	    createInfo.mipLevels             = 1u;
 	    createInfo.format                = VK_FORMAT_R8_UNORM;
-	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	    createInfo.initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
 	    createInfo.queueFamilyIndexCount = 0;
@@ -1292,11 +1277,22 @@ void CreateImage()
         };
 
         // Allocate info
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.memoryTypeIndex = memoryTypeID;
-        allocInfo.allocationSize  = memoryRequirements.size;
-        allocInfo.pNext           = VK_NULL_HANDLE;
+	    VkMemoryAllocateInfo allocInfo{};
+	    allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	    allocInfo.memoryTypeIndex = memoryTypeID;
+        allocInfo.allocationSize  = 512_MiB;
+	    // - Allocate flags info
+	    //   -> We have to set the VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT flag to query a buffer's device address
+	    //      via vkGetBufferDeviceAddress and use that address inside shaders (e.g., for ray tracing or
+	    //      pointer-heavy data structures). The flag does not cause notable performance degradation or memory
+	    //      overhead on modern hardware and drivers.
+	    VkMemoryAllocateFlagsInfo allocFlagsInfo{};
+	    allocFlagsInfo.sType      = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        allocFlagsInfo.flags      = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
+	    allocFlagsInfo.deviceMask = 1u; // Single device -> Only one device in "group";
+	    allocFlagsInfo.pNext      = VK_NULL_HANDLE;
+	    // - Add to pNext chain
+        allocInfo.pNext = &allocFlagsInfo;
 
         // Allocation
         ThrowIfFailed(
@@ -1339,7 +1335,8 @@ void CreateImage()
         );
     }
 
-    // Write descriptors
+    // Write descriptor
+    // -> Currently only a single descriptor
     {
         // Data passed to descriptor creation
         std::vector<VkHostAddressRangeEXT>       hostAddressRanges;
@@ -1435,16 +1432,6 @@ void CreateImage()
         // Set the offset to the storage descriptor
         g_Image.StorageDescHeapOffsetInBytes = currentHeapByteOffset;
 
-        // Adjust heap offset
-        currentHeapByteOffset += g_DescriptorHeap.ImageDescSizeInBytes;
-
-        // Add sampled image descriptor
-        AddDescriptor(
-            VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-            currentHeapByteOffset
-        );
-
         // Write
         ThrowIfFailed(
             g_vkWriteResourceDescriptorsEXT(
@@ -1465,7 +1452,7 @@ void CreateReadBackBuffer()
         // Create info
         VkBufferCreateInfo createInfo{};
 	    createInfo.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	    createInfo.size                  = 4u;
+	    createInfo.size                  = g_Image.Width * g_Image.Height * 4u;
 	    createInfo.usage                 = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
 	    createInfo.queueFamilyIndexCount = 0;
@@ -1520,9 +1507,9 @@ void CreateReadBackBuffer()
 
         // Allocate info
         VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.memoryTypeIndex = memoryTypeID;
-        allocInfo.allocationSize  = memoryRequirements.size;
+	    allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	    allocInfo.memoryTypeIndex = memoryTypeID;
+	    allocInfo.allocationSize  = memoryRequirements.size;
 	    allocInfo.pNext           = VK_NULL_HANDLE;
 
         // Allocation
@@ -1550,7 +1537,7 @@ void CreateReadBackBuffer()
                 g_pDevice,
                 g_ReadBackBuffer.pMemory,
                 0ull,
-                4u,
+                memoryRequirements.size,
                 0u,
                 reinterpret_cast<void**>(&g_ReadBackBuffer.pHostMemoryAddress)
             ),
@@ -1878,11 +1865,14 @@ void Dispatch()
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
     );
 
+    // TODO: Push image dimensions
+
     // Dispatch
+    // -> Local threads: (8, 8, 1)
     vkCmdDispatch(
         g_pCmdBuffer,
-        1u,
-        1u,
+        static_cast<uint32_t>(ceil(g_Image.Width  / 8u)),
+        static_cast<uint32_t>(ceil(g_Image.Height / 8u)),
         1u
     );
 
@@ -1904,7 +1894,7 @@ void Dispatch()
         region.bufferOffset                    = 0u;
         region.bufferRowLength                 = 0u; // Image data tightly packed
         region.bufferImageHeight               = 0u; // Image data tightly packed
-        region.imageExtent                     = { 1u, 1u, 1u };
+        region.imageExtent                     = { g_Image.Width, g_Image.Height, 1u };
         region.imageOffset                     = { 0, 0, 0 };
         region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
         region.imageSubresource.baseArrayLayer = 0u;
@@ -1971,7 +1961,7 @@ void Dispatch()
     // Sync
     vkDeviceWaitIdle(g_pDevice);
 
-    // Print the value
+    // Print the values
     const uint8_t rawValue     { *g_ReadBackBuffer.pHostMemoryAddress };
     const float   writtenValue { rawValue / 255.0f };
     std::cout << "    Written value: " << writtenValue << '\n';
