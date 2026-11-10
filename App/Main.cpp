@@ -92,7 +92,52 @@ PFN_vkCmdPushDataEXT              g_vkCmdPushDataEXT              { VK_NULL_HAND
 
 // Debug/validation components
 VkDebugUtilsMessengerEXT g_pDebugMessenger { VK_NULL_HANDLE };
-VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
+//
+// Debug callbacks
+// -> We need two distinct routines since we want to check for
+//    VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT
+//    which belongs to a device extension. Thus, we should not check
+//    for it in the instance's debug callback.
+//
+// - For VkInstance
+VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallbackInstance(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData)
+{
+    // Convert the severity and type to a string
+    std::string severity;
+    switch (messageSeverity)
+    {
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: severity = "VERBOSE"; break;
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:    severity = "INFO";    break;
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: severity = "WARNING"; break;
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:	  severity = "ERROR";   break;
+    default:                                              severity = "UNKOWN";  break;
+    }
+    std::string type;
+    switch (messageType)
+    {
+    case VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT:     type = "GENERAL";         break;
+    case VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT:  type = "VALIDATION";      break;
+    case VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT: type = "PERFORMANCE";     break;
+    default:                                              type = "UNKOWN";          break;
+    }
+
+    std::cout << "\nVulkan Debug Message\n"
+        << "[Severity] " << severity << '\n'
+        << "[Type]     " << type << '\n'
+        << "[Message]  " << (pCallbackData->pMessage ? pCallbackData->pMessage : "None") << '\n';
+
+    // Boolean indicates if Vulkan call that triggered the validation layer callback
+    // should be aborted. VK_TRUE is normally only used to test the validation layers
+    // themselves.
+    return VK_FALSE;
+}
+//
+// - For VkDevice
+VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallbackDevice(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
@@ -121,7 +166,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
     std::cout << "\nVulkan Debug Message\n"
         << "[Severity] " << severity << '\n'
         << "[Type]     " << type << '\n'
-        << "[Message]  " << pCallbackData->pMessage << "\n";
+        << "[Message]  " << (pCallbackData->pMessage ? pCallbackData->pMessage : "None") << '\n';
 
     // Handle address binding message
     if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT)
@@ -185,15 +230,31 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
     // themselves.
     return VK_FALSE;
 }
-
-// Debug messenger create info
-// -> Required in different places
-VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfo()
+//
+// Debug messenger create infos
+// - Instance
+VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfoInstance()
 {
-    // This function is a helper because we need two debug messengers,
-	// one general and another one to handle the validation layers for
-	// instance creation and destruction.
+	VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+	createInfo.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+	createInfo.messageSeverity =
+		  VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
+		| VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+		| VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+        | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+	createInfo.messageType     =
+		  VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+		| VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+	createInfo.pfnUserCallback = DebugCallbackInstance;
+	createInfo.pUserData       = VK_NULL_HANDLE;
+	createInfo.pNext           = VK_NULL_HANDLE;
+	createInfo.flags           = 0;
 
+	return createInfo;
+}
+// - Device
+VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfoDevice()
+{
 	VkDebugUtilsMessengerCreateInfoEXT createInfo{};
 	createInfo.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
 	createInfo.messageSeverity =
@@ -205,7 +266,7 @@ VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfo()
 		  VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
 		| VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
         | VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT;
-	createInfo.pfnUserCallback = DebugCallback;
+	createInfo.pfnUserCallback = DebugCallbackDevice;
 	createInfo.pUserData       = VK_NULL_HANDLE;
 	createInfo.pNext           = VK_NULL_HANDLE;
 	createInfo.flags           = 0;
@@ -218,7 +279,7 @@ void ThrowIfFailed(VkResult result, int line)
 {
     // Error message
     std::ostringstream sstream;
-    sstream << "Vulkan failed with VkResult "
+    sstream << "\nVulkan failed with VkResult "
         << std::to_string(result)
         << " at line "
         << line
@@ -448,7 +509,7 @@ void CreateInstance()
     //   messenger that outputs validation layer
     //   messages about the instance creation and
     //   destruction.
-    const VkDebugUtilsMessengerCreateInfoEXT debMsgCreateInfo { MakeDebugMessengerCreateInfo() };
+    const VkDebugUtilsMessengerCreateInfoEXT debMsgCreateInfo { MakeDebugMessengerCreateInfoInstance() };
     createInfo.pNext                   = reinterpret_cast<const void*>(&debMsgCreateInfo);
 #endif
 	// - App info
@@ -497,7 +558,7 @@ void CreateDebugMessenger()
 {
 #if defined(DEBUG) | defined(_DEBUG)
     // Create info
-    const VkDebugUtilsMessengerCreateInfoEXT createInfo { MakeDebugMessengerCreateInfo() };
+    const VkDebugUtilsMessengerCreateInfoEXT createInfo { MakeDebugMessengerCreateInfoDevice() };
 
     // Creation
     ThrowIfFailed(
@@ -675,18 +736,17 @@ void PickPhysicalDevice()
         const auto& [devID, devInfo] { *deviceIDToInfo.begin() };
 
         // Message
-        std::cout << "Found a single suitable device: " << devInfo.Name << "\n";
+        std::cout << "\nFound a single suitable device: " << devInfo.Name << "\n";
 
         // Set the physical device
         g_pPhysicalDevice = devInfo.pPhysicalDevice;
-        std::cout << "\n";
         return;
     }
 
     // If there are multiple suitable devices
     {
         // List the suitable devices
-        std::cout << "Found multiple suitable devices:\n";
+        std::cout << "\nFound multiple suitable devices:\n";
         for (const auto& [devID, devInfo] : deviceIDToInfo)
         {
             std::cout << "- ID: " << devID << " / Name: " << devInfo.Name << '\n';
@@ -724,7 +784,6 @@ void PickPhysicalDevice()
 
             // Set the physical device
             g_pPhysicalDevice = it->second.pPhysicalDevice;
-            std::cout << "\n";
             break;
         }
     }
@@ -1706,13 +1765,13 @@ void Init()
     CreateReadBackBuffer();
     CreatePipeline();
 
-    std::cout << "Finished app init\n\n";
+    std::cout << "\nFinished app init\n";
 }
 
 // Dispatch
 void Dispatch()
 {
-    std::cout << "Dispatching...\n";
+    std::cout << "\nExecuting...\n";
 
     // Helper
     auto ScheduleImageBarrier = [](
@@ -1946,11 +2005,12 @@ void Dispatch()
     // Sync
     vkDeviceWaitIdle(g_pDevice);
 
+    std::cout << "\n...finished execution.\n";
+
     // Print the values
     const uint32_t value { *reinterpret_cast<uint32_t*>(g_ReadBackBuffer.pHostMemoryAddress) };
-    std::cout << "    Written value (image width * height): " << value << '\n';
-
-    std::cout << "...Success!\n\n";
+    std::cout << "\nWritten value of texel (0, 0)               : " << value << '\n';
+    std::cout << "Intended to equal image width * image height: " << g_Image.Width * g_Image.Height << "\n";
 }
 
 // Clean up
@@ -1985,7 +2045,7 @@ void CleanUp()
     if (g_pInstance)
         vkDestroyInstance(g_pInstance, VK_NULL_HANDLE);
 
-    std::cout << "Cleaned up app\n";
+    std::cout << "\nCleaned up app\n";
 }
 
 int main()
