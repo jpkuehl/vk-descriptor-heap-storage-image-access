@@ -1,6 +1,7 @@
 // Standard Library
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <stdexcept>
 #include <sstream>
 #include <vector>
@@ -24,6 +25,14 @@ constexpr uint64_t operator"" _MiB(uint64_t x) {
 constexpr uint64_t operator"" _GiB(uint64_t x) {
     return x << 30;
 }
+
+// Command line variables
+// - If not provided, we as much memory as required by
+//   the image.
+uint64_t g_ImageMemoryAllocationByteSize { 0ull  };
+// - If not provided, we use capture replay for the
+//   image memory.
+bool     g_ImageMemoryNoCaptureReplay    { false };
 
 // Core app components
 VkInstance                              g_pInstance                  { VK_NULL_HANDLE };
@@ -1328,15 +1337,15 @@ void CreateImage()
 	    VkMemoryAllocateInfo allocInfo{};
 	    allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 	    allocInfo.memoryTypeIndex = memoryTypeID;
-        allocInfo.allocationSize  = 256_MiB;
+        // - Use the parsed value but default to the required memory size
+        allocInfo.allocationSize  = std::max(memoryRequirements.size, g_ImageMemoryAllocationByteSize);
 	    // - Allocate flags info
-	    //   -> We have to set the VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT flag to query a buffer's device address
-	    //      via vkGetBufferDeviceAddress and use that address inside shaders (e.g., for ray tracing or
-	    //      pointer-heavy data structures). The flag does not cause notable performance degradation or memory
-	    //      overhead on modern hardware and drivers.
 	    VkMemoryAllocateFlagsInfo allocFlagsInfo{};
 	    allocFlagsInfo.sType      = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-        allocFlagsInfo.flags      = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
+        allocFlagsInfo.flags      = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        // - Set the capture replay flag only if not wished otherwise
+        if (!g_ImageMemoryNoCaptureReplay)
+            allocFlagsInfo.flags |= VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
 	    allocFlagsInfo.deviceMask = 1u; // Single device -> Only one device in "group";
 	    allocFlagsInfo.pNext      = VK_NULL_HANDLE;
 	    // - Add to pNext chain
@@ -2009,8 +2018,8 @@ void Dispatch()
 
     // Print the values
     const uint32_t value { *reinterpret_cast<uint32_t*>(g_ReadBackBuffer.pHostMemoryAddress) };
-    std::cout << "\nWritten value of texel (0, 0)               : " << value << '\n';
-    std::cout << "Intended to equal image width * image height: " << g_Image.Width * g_Image.Height << "\n";
+    std::cout << "\nWritten value of texel (0, 0)                : " << value << '\n';
+    std::cout << "Intended to equal image width * image height : " << g_Image.Width * g_Image.Height << "\n";
 }
 
 // Clean up
@@ -2048,8 +2057,28 @@ void CleanUp()
     std::cout << "\nCleaned up app\n";
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    // Retrieve the command line args
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string_view arg = argv[i];
+
+        // Image memory allocation size in MiB
+        if (arg == "--image-mem-alloc-mib" && i + 1 < argc)
+        {
+            // Get the parsed MiB value
+            // -> stoull converts string to unsigned long long (uint64_t)
+            const uint64_t memAllocSizeMiB { std::stoull(argv[++i]) };
+
+            // Convert the value to bytes
+            g_ImageMemoryAllocationByteSize = memAllocSizeMiB << 20;
+        }
+        // Image memory no capture replay
+        else if (arg == "--image-mem-no-capture-replay")
+            g_ImageMemoryNoCaptureReplay = true;
+    }
+
     try
     {
         // Init
