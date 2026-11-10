@@ -1208,7 +1208,7 @@ void CreateImage()
 	    createInfo.extent.depth          = 1u;
 	    createInfo.arrayLayers           = 1u;
 	    createInfo.mipLevels             = 1u;
-	    createInfo.format                = VK_FORMAT_R8_UNORM;
+	    createInfo.format                = VK_FORMAT_R32_UINT;
 	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	    createInfo.initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
@@ -1269,7 +1269,7 @@ void CreateImage()
 	    VkMemoryAllocateInfo allocInfo{};
 	    allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 	    allocInfo.memoryTypeIndex = memoryTypeID;
-        allocInfo.allocationSize  = 512_MiB;
+        allocInfo.allocationSize  = 256_MiB;
 	    // - Allocate flags info
 	    //   -> We have to set the VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT flag to query a buffer's device address
 	    //      via vkGetBufferDeviceAddress and use that address inside shaders (e.g., for ray tracing or
@@ -1369,7 +1369,7 @@ void CreateImage()
 		        viewCreateInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 		        viewCreateInfo.image                           = g_Image.pImage;
 		        viewCreateInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-		        viewCreateInfo.format                          = VK_FORMAT_R8_UNORM;
+		        viewCreateInfo.format                          = VK_FORMAT_R32_UINT;
 		        viewCreateInfo.components.r                    = VK_COMPONENT_SWIZZLE_IDENTITY;
 		        viewCreateInfo.components.g                    = VK_COMPONENT_SWIZZLE_IDENTITY;
 		        viewCreateInfo.components.b                    = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -1947,9 +1947,8 @@ void Dispatch()
     vkDeviceWaitIdle(g_pDevice);
 
     // Print the values
-    const uint8_t rawValue     { *g_ReadBackBuffer.pHostMemoryAddress };
-    const float   writtenValue { rawValue / 255.0f };
-    std::cout << "    Written value: " << writtenValue << '\n';
+    const uint32_t value { *reinterpret_cast<uint32_t*>(g_ReadBackBuffer.pHostMemoryAddress) };
+    std::cout << "    Written value (image width * height): " << value << '\n';
 
     std::cout << "...Success!\n\n";
 }
