@@ -1137,8 +1137,6 @@ void CreateDescriptorHeap()
         allocInfo.memoryTypeIndex = memoryTypeID;
         allocInfo.allocationSize  = memoryRequirements.size;
         // - Allocate flags info
-	    //   -> We have to set the VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT flag to query a buffer's device address
-	    //      via vkGetBufferDeviceAddress and use that address inside shaders.
 	    VkMemoryAllocateFlagsInfo allocFlagsInfo{};
 	    allocFlagsInfo.sType      = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
 	    allocFlagsInfo.flags      = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
