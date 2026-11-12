@@ -4,7 +4,7 @@ This standalone Vulkan reproducer demonstrates a device loss during a compute sh
 
 I first encountered the issue while migrating my renderer from classic descriptor sets to `VK_EXT_descriptor_heap`. The renderer also exhibited rendering artifacts with the capture/replay flag disabled for image memory. The full bug report covers those observations and the renderer's allocation tests.
 
-<!-- TODO: Add a link to the NVIDIA bug report once available. -->
+The full bug report can be found here: [NVIDIA Bug Report](https://forums.developer.nvidia.com/t/vk-ext-descriptor-heap-storage-image-accesses-cause-device-loss-with-high-gpu-virtual-addresses/388845)
 
 The program creates a 1280 × 720 `VK_FORMAT_R32_UINT` image and binds it through a `VK_DESCRIPTOR_TYPE_STORAGE_IMAGE` descriptor in the resource heap. A compute dispatch queries the image dimensions and writes their product to each texel. The expected readback at texel `(0, 0)` is **921600** after `vkDeviceWaitIdle()` returns `VK_SUCCESS`.
 
