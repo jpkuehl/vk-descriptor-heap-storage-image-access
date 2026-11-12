@@ -49,6 +49,7 @@ struct Image
     uint64_t                            StorageDescHeapOffsetInBytes { 0u };
     static constexpr uint32_t           Width                        { 1280u };
     static constexpr uint32_t           Height                       { 720u  };
+    static constexpr VkFormat           Format                       { VK_FORMAT_R32_UINT };
 }                                       g_Image                      {};
 struct ReadBackBuffer                                                  
 {                                                                    
@@ -1274,7 +1275,7 @@ void CreateImage()
 	    createInfo.extent.depth          = 1u;
 	    createInfo.arrayLayers           = 1u;
 	    createInfo.mipLevels             = 1u;
-	    createInfo.format                = VK_FORMAT_R32_UINT;
+	    createInfo.format                = g_Image.Format;
 	    createInfo.usage                 = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	    createInfo.initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED;
 	    createInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
@@ -1435,7 +1436,7 @@ void CreateImage()
 		        viewCreateInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 		        viewCreateInfo.image                           = g_Image.pImage;
 		        viewCreateInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-		        viewCreateInfo.format                          = VK_FORMAT_R32_UINT;
+		        viewCreateInfo.format                          = g_Image.Format;
 		        viewCreateInfo.components.r                    = VK_COMPONENT_SWIZZLE_IDENTITY;
 		        viewCreateInfo.components.g                    = VK_COMPONENT_SWIZZLE_IDENTITY;
 		        viewCreateInfo.components.b                    = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -1887,7 +1888,6 @@ void Dispatch()
     );
 
     // Push descriptor index
-    // -> Only if we did not set it as constant offset
     {
         // Push data info
 		VkPushDataInfoEXT pushDataInfo{};
@@ -2010,7 +2010,10 @@ void Dispatch()
     }
 
     // Sync
-    vkDeviceWaitIdle(g_pDevice);
+    ThrowIfFailed(
+        vkDeviceWaitIdle(g_pDevice),
+        __LINE__
+    );
 
     std::cout << "\n...finished execution.\n";
 

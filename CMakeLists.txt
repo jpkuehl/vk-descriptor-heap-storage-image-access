@@ -141,10 +141,10 @@ add_custom_target(ShaderCompilation ALL DEPENDS "${SHADER_OUTPUT_SPV}" "${SHADER
 ###################################################### APP #######################################################
 
 # Add executable
-add_executable(App App/Main.cpp)
+add_executable(Repro App/Main.cpp)
 
 # Set macros
-target_compile_definitions(App PRIVATE
+target_compile_definitions(Repro PRIVATE
     # - Set API version macro
     #   -> For VkInstance creation, VkPhysicalDevice selection, and
     #      device feature activation.
@@ -154,15 +154,15 @@ target_compile_definitions(App PRIVATE
 )
 
 # Link Vulkan
-target_link_libraries(App PRIVATE Vulkan::Vulkan)
+target_link_libraries(Repro PRIVATE Vulkan::Vulkan)
 
 # In case we use Visual Studio (not VS Code!)
 # - Set the startup project
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT App)
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Repro)
 # - Set the debuggers working directory to $(TargetDir) instead of $(ProjectDir).
 #   $(ProjectDir) is the default for this setting in VS but then the Shaders are
 #   not found if the program is run from inside VS.
-set_property(TARGET App PROPERTY
+set_property(TARGET Repro PROPERTY
     VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/Bin/$<CONFIG>
 )
 ##################################################################################################################
